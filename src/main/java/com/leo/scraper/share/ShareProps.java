@@ -32,7 +32,7 @@ public class ShareProps {
       put("right_5", "minAnno,minAnnoDate");
       put("right_6", "chiusuraPrecedente");
       put("right_7", "prezzoRiferimento,dataOraPrezzoRifermento");
-      put("right_8", "prezzoUfficiale,dataOraPrezzoUfficiale");
+      put("right_8", "prezzoUfficiale,dataPrezzoUfficiale");
       put("right_9", "aperturaOdierna");
       put("right_10", "performance1Mese");
       put("right_11", "performance6Mesi");
@@ -71,7 +71,7 @@ public class ShareProps {
       put("prezzoRiferimento", Double.class);
       put("dataOraPrezzoRifermento", LocalDateTime.class);
       put("prezzoUfficiale", Double.class);
-      put("dataOraPrezzoUfficiale", LocalDateTime.class);
+      put("dataPrezzoUfficiale", LocalDate.class);
       put("aperturaOdierna", Double.class);
       put("performance1Mese", Double.class);
       put("performance6Mesi", Double.class);
