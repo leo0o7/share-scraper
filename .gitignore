@@ -3,6 +3,7 @@ isins.txt
 shares_output.txt
 scraper.log
 
+.mvn
 # https://github.com/github/gitignore/blob/main/Maven.gitignore
 target/
 pom.xml.tag
