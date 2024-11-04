@@ -15,6 +15,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.concurrent.Callable;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 // s.setCodiceIsin(getElementOrFallback(Side.LEFT, 1, "Not found"));
 // s.setCodiceAlfanumerico(getElementOrFallback(Side.LEFT, 3, "Not found"));
@@ -43,7 +44,11 @@ public class Scraper {
   private Document doc;
   private String scrapeUrl;
   // exponential backoff methods
-  private Callable<Document> CONNECT_TO_PAGE = () -> Jsoup.connect(scrapeUrl).timeout(TIMEOUT).get();
+  private Callable<Document> CONNECT_TO_PAGE = () -> Jsoup.connect(scrapeUrl).userAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
+      .referrer("https://google.com")
+      .timeout(TIMEOUT).get();
+
   private Function<Exception, Boolean> RETRY_CONDITION = (Exception e) -> e.getMessage().contains("Status=429");
 
   private Scraper(String initialUrl) throws IOException {
@@ -138,13 +143,20 @@ public class Scraper {
   public <T> T convertTextToType(String text, Class<T> type) {
     try {
       if (type == Double.class) {
-        // TODO: better double content implementation
-        // it should check if dots are used as integer part splitter or as thousands
-        // separator
-        // could implement that with regex, something like:
-        // ^(\d{1,3})(\.?\d{3})*(,\d+)?$
-        return type.cast(Double.valueOf(text.replace(".", "").replace(",", ".")));
+        boolean dotsAsThousandsSeparator = Pattern.compile("^(\\d{1,3})(\\.?\\d{3})*(,\\d+)?$").matcher(text).matches();
+
+        if (dotsAsThousandsSeparator) {
+          text = text.replace(".", "").replace(",", ".");
+        } else {
+          text = text.replace(",", "");
+        }
+
+        return type.cast(Double.valueOf(text));
       } else if (type == Integer.class) {
+        // replace international thousands separators with "" to avoid errors
+        // WARNING: this means it would work even when given a double, so be careful
+        // when using it
+        text = text.replace(".", "").replace(",", "");
         return type.cast(Integer.valueOf(text));
       } else if (type == String.class) {
         return type.cast(text);
@@ -154,7 +166,7 @@ public class Scraper {
         return type.cast(LocalDateTime.parse(text, DATE_TIME_FORMATTER));
       }
     } catch (NumberFormatException | DateTimeParseException e) {
-      log("Invalid format: \"" + text + "\" for type " + type, "error");
+      log("Invalid format: \"" + text + "\" for type " + type, "ERROR");
     }
     return null;
   }

@@ -44,7 +44,6 @@ public class ScraperElementsTest extends BaseScraperTest {
   }
 
   @Test
-  @Disabled // implement the todo in Scraper.convertTextToType
   public void testGetDoubleContent() {
     Element element = new Element("div").text("123.45");
     Double result = scraper.getDoubleContent(element, 0.0);
