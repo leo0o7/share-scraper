@@ -138,6 +138,11 @@ public class Scraper {
   public <T> T convertTextToType(String text, Class<T> type) {
     try {
       if (type == Double.class) {
+        // TODO: better double content implementation
+        // it should check if dots are used as integer part splitter or as thousands
+        // separator
+        // could implement that with regex, something like:
+        // ^(\d{1,3})(\.?\d{3})*(,\d+)?$
         return type.cast(Double.valueOf(text.replace(".", "").replace(",", ".")));
       } else if (type == Integer.class) {
         return type.cast(Integer.valueOf(text));
