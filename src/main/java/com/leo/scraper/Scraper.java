@@ -116,7 +116,7 @@ public class Scraper {
     throw new IOException("Retries exceeded");
   }
 
-  private <T> T getContentOrFallback(Element el, T fallback, Class<T> T) {
+  public <T> T getContentOrFallback(Element el, T fallback, Class<T> T) {
     if (el != null) {
       T value = convertTextToType(el.text(), T);
       return (value != null) ? value : fallback;
@@ -124,7 +124,16 @@ public class Scraper {
     return fallback;
   }
 
-  private <T> T convertTextToType(String text, Class<T> type) {
+  public <T> T getContentOrFallback(String selector, T fallback, Class<T> T) {
+    Element el = getElement(selector);
+    if (el != null) {
+      T value = convertTextToType(el.text(), T);
+      return (value != null) ? value : fallback;
+    }
+    return fallback;
+  }
+
+  public <T> T convertTextToType(String text, Class<T> type) {
     try {
       if (type == Double.class) {
         return type.cast(Double.valueOf(text.replace(".", "").replace(",", ".")));
@@ -139,6 +148,10 @@ public class Scraper {
       log("Invalid format: \"" + text + "\" for type " + type, "error");
     }
     return null;
+  }
+
+  public String getScrapeUrl() {
+    return scraper.scrapeUrl;
   }
 
   private void log(String err, String type) {
@@ -215,15 +228,6 @@ public class Scraper {
 
   public String getStringContent(Element el, String fallback) {
     return getContentOrFallback(el, fallback, String.class);
-  }
-
-  private <T> T getContentOrFallback(String selector, T fallback, Class<T> T) {
-    Element el = getElement(selector);
-    if (el != null) {
-      T value = convertTextToType(el.text(), T);
-      return (value != null) ? value : fallback;
-    }
-    return fallback;
   }
 
 }
