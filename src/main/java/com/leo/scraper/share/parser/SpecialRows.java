@@ -7,6 +7,8 @@ import com.leo.scraper.Scraper;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.jsoup.nodes.Element;
 
@@ -62,12 +64,26 @@ public class SpecialRows {
       return;
     }
 
-    if (arr[1].contains(" ")) {
-      LocalDateTime dateTime = scraper.convertTextToType(arr[1], LocalDateTime.class);
-      s.setProperty(dateProp, dateTime);
-    } else {
-      LocalDate date = scraper.convertTextToType(arr[1], LocalDate.class);
-      s.setProperty(dateProp, date);
+    // the first group matches the date
+    // (\d{2}\/\d{2}\/\d{2})
+    // the second group matches the time
+    // (:?\s\d{2}.\d{2}.\d{2})?
+    // it's non capturing so it's not required for the match to happen
+    // so both `04/11/24` and `04/11/24 17.45.00` will be captured
+    Matcher localDateMatcher = Pattern.compile("(\\d{2}\\/\\d{2}\\/\\d{2})(:?\\s\\d{2}.\\d{2}.\\d{2})?")
+        .matcher(arr[1]);
+
+    if (localDateMatcher.matches()) {
+      // if it has two groups it's a date and time
+      if (localDateMatcher.group(2) != null) {
+        // replacements to match the Scraper standard formatter
+        arr[1] = arr[1].replace(" ", " - ");
+        LocalDateTime dateTime = scraper.convertTextToType(arr[1], LocalDateTime.class);
+        s.setProperty(dateProp, dateTime);
+      } else {
+        LocalDate date = scraper.convertTextToType(arr[1], LocalDate.class);
+        s.setProperty(dateProp, date);
+      }
     }
 
   }
