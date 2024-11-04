@@ -6,7 +6,6 @@ import com.leo.scraper.Scraper;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import org.jsoup.nodes.Element;
@@ -54,7 +53,7 @@ public class SpecialRows {
       return;
 
     String[] arr = proprietaryString.split(" - ");
-    double value = Double.valueOf(arr[0].replace(".", "").replace(",", "."));
+    Double value = scraper.convertTextToType(arr[0], Double.class);
     s.setProperty(valueProp, value);
 
     // if no date found set it to null and return
@@ -64,10 +63,10 @@ public class SpecialRows {
     }
 
     if (arr[1].contains(" ")) {
-      LocalDateTime dateTime = LocalDateTime.parse(arr[1], DateTimeFormatter.ofPattern("dd/MM/uu HH.mm.ss"));
+      LocalDateTime dateTime = scraper.convertTextToType(arr[1], LocalDateTime.class);
       s.setProperty(dateProp, dateTime);
     } else {
-      LocalDate date = LocalDate.parse(arr[1], DateTimeFormatter.ofPattern("dd/MM/uu"));
+      LocalDate date = scraper.convertTextToType(arr[1], LocalDate.class);
       s.setProperty(dateProp, date);
     }
 
@@ -81,7 +80,8 @@ public class SpecialRows {
     if (proprietaryString == null || proprietaryString.isEmpty() || proprietaryString.equals(""))
       return;
 
-    Double performance = Double.valueOf(proprietaryString.replace(".", "").replace(",", ".").replace("%", ""));
+    String formattedString = proprietaryString.replace(".", "").replace(",", ".").replace("%", "");
+    Double performance = scraper.convertTextToType(formattedString, Double.class);
 
     s.setProperty(propName, performance);
   }

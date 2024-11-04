@@ -9,6 +9,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -31,6 +32,7 @@ import java.util.function.Function;
 
 public class Scraper {
   private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yy - HH.mm.ss");
+  private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yy");
   // singleton instance of the class
   private static Scraper scraper;
   // logging info and errors
@@ -141,6 +143,8 @@ public class Scraper {
         return type.cast(Integer.valueOf(text));
       } else if (type == String.class) {
         return type.cast(text);
+      } else if (type == LocalDate.class) {
+        return type.cast(LocalDate.parse(text, DATE_FORMATTER));
       } else if (type == LocalDateTime.class) {
         return type.cast(LocalDateTime.parse(text, DATE_TIME_FORMATTER));
       }
