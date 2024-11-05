@@ -36,7 +36,7 @@ The Share Scraper project scrapes financial data from the Borsa Italiana website
 1. **Clone the Repository**:
 
    ```bash
-   git clone https://github.com/yourusername/share-scraper.git
+   git clone https://github.com/leo0o7/share-scraper.git
    cd share-scraper
    ```
 
