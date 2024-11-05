@@ -286,6 +286,7 @@ public class Share {
     setProperty("prezzoUfficiale", prezzoUfficiale);
   }
 
+  public LocalDate getDataPrezzoUfficiale() {
     return (LocalDate) getProperty("dataPrezzoUfficiale");
   }
 

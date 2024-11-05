@@ -1,4 +1,3 @@
-
 package com.leo.scraper.share.parser;
 
 import java.io.IOException;
