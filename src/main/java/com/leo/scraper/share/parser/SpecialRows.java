@@ -96,7 +96,7 @@ public class SpecialRows {
     if (proprietaryString == null || proprietaryString.isEmpty() || proprietaryString.equals(""))
       return;
 
-    String formattedString = proprietaryString.replace(".", "").replace(",", ".").replace("%", "");
+    String formattedString = proprietaryString.replace("%", "");
     Double performance = scraper.convertTextToType(formattedString, Double.class);
 
     s.setProperty(propName, performance);
