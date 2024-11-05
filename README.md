@@ -9,6 +9,7 @@ A Java-based scraper for fetching financial data using ISIN codes. This project 
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Usage](#usage)
+- [Running Tests](#running-tests)
 - [Error Handling](#error-handling)
 
 ## Overview
@@ -76,6 +77,25 @@ Run the `Main` class to start the application. It provides a simple command-line
    Selected: "1. Test scraping shares"
    Output file (default: shares_output.txt): [Press Enter for default or specify a path]
    ```
+
+### Running Tests
+
+To execute the test suite for this project using Maven, follow these steps:
+
+1. Open a terminal in the root directory of the project.
+2. Run the following command to compile and execute all tests:
+
+   ```bash
+   mvn test
+   ```
+
+   This command will compile the test classes and run the tests in the `src/test` directory.
+
+- To run a specific test class, you can specify the test name:
+
+  ```bash
+  mvn -Dtest=com.leo.scraper.<TestClassName> test
+  ```
 
 ## Error Handling
 

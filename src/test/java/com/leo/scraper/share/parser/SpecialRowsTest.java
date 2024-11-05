@@ -1,7 +1,6 @@
 package com.leo.scraper.share.parser;
 
 import com.leo.scraper.share.Share;
-import com.leo.scraper.Scraper;
 import org.jsoup.nodes.Element;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -13,12 +12,10 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class SpecialRowsTest {
-  private static Scraper scraper;
   private static Share share;
 
   @BeforeAll
   public static void setUp() throws IOException {
-    scraper = Scraper.getInstance();
     share = new Share("");
   }
 
