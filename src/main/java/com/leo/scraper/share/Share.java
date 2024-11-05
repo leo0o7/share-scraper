@@ -286,12 +286,11 @@ public class Share {
     setProperty("prezzoUfficiale", prezzoUfficiale);
   }
 
-  public LocalDateTime getDataOraPrezzoUfficiale() {
-    return (LocalDateTime) getProperty("dataOraPrezzoUfficiale");
+    return (LocalDate) getProperty("dataPrezzoUfficiale");
   }
 
-  public void setDataOraPrezzoUfficiale(LocalDateTime dataOraPrezzoUfficiale) {
-    setProperty("dataOraPrezzoUfficiale", dataOraPrezzoUfficiale);
+  public void setDataPrezzoUfficiale(LocalDate dataOraPrezzoUfficiale) {
+    setProperty("dataPrezzoUfficiale", dataOraPrezzoUfficiale);
   }
 
   public Double getAperturaOdierna() {
