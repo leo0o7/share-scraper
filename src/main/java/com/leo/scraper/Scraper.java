@@ -17,22 +17,9 @@ import java.util.concurrent.Callable;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
-// s.setCodiceIsin(getElementOrFallback(Side.LEFT, 1, "Not found"));
-// s.setCodiceAlfanumerico(getElementOrFallback(Side.LEFT, 3, "Not found"));
-// s.setSuperSector(getElementOrFallback(Side.LEFT, 4, "Not found"));
-// s.setMercatoSegmento(getElementOrFallback(Side.LEFT, 5, "Not found"));
-// s.setMaxOggi(getElementOrFallback(Side.RIGHT, 2, 0.0));
-// s.setMinOggi(getElementOrFallback(Side.RIGHT, 4, 0.0));
-//
-// String maxAnnoElement = getElementOrFallback(Side.RIGHT, 3, "Not found");
-// String minAnnoElement = getElementOrFallback(Side.RIGHT, 5, "Not found");
-// String pf1MeseElement = getElementOrFallback(Side.RIGHT, 10, "Not found");
-// String pf6MesiElement = getElementOrFallback(Side.RIGHT, 11, "Not found");
-// String pf1AnnoElement = getElementOrFallback(Side.RIGHT, 12, "Not found");
-// private static final String SCRAPE_URL = "https://www.borsaitaliana.it/borsa/azioni/dati-completi.html?isin=IT0003796171&lang=it";
-
 public class Scraper {
-  private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yy - HH.mm.ss");
+  // allow both HH and H hours with H
+  private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yy - H.mm.ss");
   private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yy");
   // singleton instance of the class
   private static Scraper scraper;
