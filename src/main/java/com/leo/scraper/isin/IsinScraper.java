@@ -13,7 +13,7 @@ import org.jsoup.select.Elements;
 
 public class IsinScraper {
   private boolean debug = false;
-  private static final int MAX_PAGES = 4;
+  private static final int MAX_PAGES = 5;
 
   private HashMap<String, String> foundIsins = new HashMap<String, String>();
 
