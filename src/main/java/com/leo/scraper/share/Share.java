@@ -5,12 +5,14 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 
+import com.leo.scraper.isin.IsinStore;
 import com.leo.scraper.share.parser.ShareParser;
 
 public class Share {
   private HashMap<String, Object> properties = new HashMap<>();
 
   public Share(String codiceIsin) throws IOException {
+    setNomeAzienda(IsinStore.getInstance().getShareByIsin(codiceIsin));
     setCodiceIsin(codiceIsin);
     ShareParser.scrapeISIN(this);
   }
@@ -27,6 +29,8 @@ public class Share {
   public String toString() {
     StringBuilder sb = new StringBuilder("Share {\n");
 
+    String nomeAzienda = getNomeAzienda();
+    sb.append(" ").append("nomeAzienda").append(": ").append(nomeAzienda != null ? nomeAzienda : "null").append(",\n");
     // iterate from left_1 to left_16
     for (int i = 1; i <= 16; i++) {
       String leftKey = "left_" + i;
@@ -66,6 +70,14 @@ public class Share {
 
     sb.append("\n}");
     return sb.toString();
+  }
+
+  public String getNomeAzienda() {
+    return (String) getProperty("nomeAzienda");
+  }
+
+  public void setNomeAzienda(String nomeAzienda) {
+    setProperty("nomeAzienda", nomeAzienda);
   }
 
   // left Table Properties
