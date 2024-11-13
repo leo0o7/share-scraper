@@ -27,14 +27,17 @@ public class Scraper {
   private static final File LOG_FILE = new File("scraper.log");
   // timeout till document unloads
   // that means processing should be at most 60s
-  private static final int TIMEOUT = 60 * 1000;
+  // private static final int TIMEOUT = 60 * 1000;
   private Document doc;
   private String scrapeUrl;
   // exponential backoff methods
-  private Callable<Document> CONNECT_TO_PAGE = () -> Jsoup.connect(scrapeUrl).userAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
-      .referrer("https://google.com")
-      .timeout(TIMEOUT).get();
+  private Callable<Document> CONNECT_TO_PAGE = () -> Jsoup.connect(scrapeUrl)
+      // .userAgent(
+      // "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
+      // Gecko) Chrome/58.0.3029.110 Safari/537.36")
+      // .referrer("https://google.com")
+      // .timeout(TIMEOUT).
+      .get();
 
   private Function<Exception, Boolean> RETRY_CONDITION = (Exception e) -> e.getMessage().contains("Status=429");
 
@@ -75,10 +78,14 @@ public class Scraper {
   }
 
   public Elements getElements(String selector) {
+    if (doc == null)
+      throw new IllegalStateException("Document must be loaded to select elements.");
     return doc.select(selector);
   }
 
   public Element getElement(String selector) {
+    if (doc == null)
+      throw new IllegalStateException("Document must be loaded to select elements.");
     return doc.selectFirst(selector);
   }
 
