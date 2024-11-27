@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 reqwest = { version = "0.12.9", features = ["blocking"] }
 scraper = "0.21.0"
+sqlx = {version = "0.8.2", features = ["runtime-tokio","postgres"] }
+tokio = { version = "1", features = ["full"] }
+dotenv = "0.15.0"
+futures = "0.3.31"
