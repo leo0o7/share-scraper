@@ -3,7 +3,7 @@ use sqlx::{query, query_as, Pool, Postgres};
 
 use crate::{
     isins::types::{DBShareIsin, ShareIsin},
-    shares::types::{Share, ShareFullInfo},
+    shares::models::{Share, ShareFullInfo},
 };
 
 pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) {
@@ -60,6 +60,7 @@ pub async fn insert_all_shares(shares: Vec<Share>, pool: &Pool<Postgres>) {
 }
 
 pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    println!("inserting share {} in db", share.share_details.isin);
     let mut tx = pool.begin().await?;
 
     let share_details = share.share_details;

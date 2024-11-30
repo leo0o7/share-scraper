@@ -1,14 +1,11 @@
+use models::Share;
 use scraper::Html;
-use types::Share;
 
-use crate::{
-    isins::types::{Isin, ShareIsin},
-    utils::get_page_text,
-};
+use crate::{isins::types::ShareIsin, utils::get_page_text};
 
+pub mod models;
 pub mod parsers;
 pub mod selectors;
-pub mod types;
 
 pub async fn scrape_share(share_isin: ShareIsin) -> Share {
     let isin = &share_isin.isin;

@@ -2,10 +2,10 @@ use std::time::SystemTime;
 
 use db::{
     connect,
-    utils::{get_share_by_isin, insert_all_shares, query_all_isins},
+    utils::{insert_all_shares, query_all_isins},
 };
 use futures::{stream::FuturesUnordered, StreamExt};
-use shares::{scrape_share, types::Share};
+use shares::{models::Share, scrape_share};
 use utils::get_elapsed_time;
 
 mod db;
@@ -61,8 +61,8 @@ async fn main() {
         }
         res.push(result);
     }
-
     println!("Scraped {} shares.", res.len());
+
     insert_all_shares(res, &pool).await;
 
     println!("Time elapsed {}", get_elapsed_time(start_time));

@@ -2,49 +2,84 @@ use std::num::{ParseFloatError, ParseIntError};
 
 use chrono::{NaiveDate, NaiveDateTime};
 use regex::Regex;
-use scraper::{element_ref::Select, ElementRef};
+use scraper::ElementRef;
 
-pub fn parse_float_or_default(element: ElementRef) -> f64 {
-    element
-        .text()
-        .next()
-        .and_then(|text| parse_float(text).ok())
-        .unwrap_or_default()
+use super::models::{PriceDateReference, PriceDateTimeReference};
+
+pub trait DefaultParse<T> {
+    fn default_parse(&self) -> T;
 }
 
-pub fn parse_str_or_default(element: ElementRef) -> String {
-    element.text().next().unwrap_or("N/A").to_owned()
+impl DefaultParse<f64> for ElementRef<'_> {
+    fn default_parse(&self) -> f64 {
+        self.text()
+            .next()
+            .and_then(|text| parse_float(text).ok())
+            .unwrap_or_default()
+    }
 }
 
-pub fn parse_datetime_or_default(element: ElementRef) -> NaiveDateTime {
-    element
-        .text()
-        .next()
-        .and_then(|text| parse_datetime(&text).ok())
-        .unwrap_or(NaiveDateTime::default())
+impl DefaultParse<String> for ElementRef<'_> {
+    fn default_parse(&self) -> String {
+        self.text().next().unwrap_or("N/A").to_owned()
+    }
 }
 
-pub fn parse_date_or_default(mut element: Select) -> NaiveDate {
-    element
-        .next()
-        .and_then(|el| el.text().next())
-        .and_then(|text| parse_date(&text).ok())
-        .unwrap_or(NaiveDate::default())
+impl DefaultParse<NaiveDateTime> for ElementRef<'_> {
+    fn default_parse(&self) -> NaiveDateTime {
+        self.text()
+            .next()
+            .and_then(|text| parse_datetime(&text).ok())
+            .unwrap_or_default()
+    }
 }
 
-pub fn parse_int_or_default(element: ElementRef) -> u64 {
-    element
-        .text()
-        .next()
-        .and_then(|text| parse_int(&text).ok())
-        .unwrap_or(0)
+impl DefaultParse<u64> for ElementRef<'_> {
+    fn default_parse(&self) -> u64 {
+        self.text()
+            .next()
+            .and_then(|text| parse_int(&text).ok())
+            .unwrap_or(0)
+    }
+}
+
+impl DefaultParse<PriceDateReference> for ElementRef<'_> {
+    fn default_parse(&self) -> PriceDateReference {
+        let price_date_str: String = self.default_parse();
+
+        price_date_str
+            .split_once(" - ")
+            .and_then(|tuple| {
+                let price = parse_float(tuple.0).unwrap_or(0.0);
+                let date = parse_date(tuple.1).unwrap_or(NaiveDate::default());
+
+                Some(PriceDateReference { price, date })
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl DefaultParse<PriceDateTimeReference> for ElementRef<'_> {
+    fn default_parse(&self) -> PriceDateTimeReference {
+        let price_datetime_str: String = self.default_parse();
+
+        price_datetime_str
+            .split_once("-")
+            .and_then(|tuple| {
+                let price = parse_float(tuple.0.trim()).unwrap_or(0.0);
+                let datetime = parse_datetime(tuple.1.trim()).unwrap_or(NaiveDateTime::default());
+
+                Some(PriceDateTimeReference { price, datetime })
+            })
+            .unwrap_or_default()
+    }
 }
 
 fn parse_int(str: &str) -> Result<u64, ParseIntError> {
     str.trim().replace(".", "").parse()
 }
 
-pub fn parse_float(text: &str) -> Result<f64, ParseFloatError> {
+fn parse_float(text: &str) -> Result<f64, ParseFloatError> {
     let dots_as_thousands_separator = Regex::new(r"^(\d{1,3})(\.?\d{3})*(,\d+)?$").unwrap();
 
     let cleaned = text
@@ -68,7 +103,7 @@ pub fn parse_float(text: &str) -> Result<f64, ParseFloatError> {
         .map(|val: f64| if is_negative { -val } else { val })
 }
 
-pub fn parse_datetime(str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
+fn parse_datetime(str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     // 29/11/24 16.07.46
     let fmt1 = "%d/%m/%y %H.%M.%S";
     // 29/11/24 - 16.07.46
@@ -82,7 +117,7 @@ pub fn parse_datetime(str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     NaiveDateTime::parse_from_str(str, fmt2)
 }
 
-pub fn parse_date(str: &str) -> Result<NaiveDate, chrono::ParseError> {
+fn parse_date(str: &str) -> Result<NaiveDate, chrono::ParseError> {
     let fmt = "%d/%m/%y";
     NaiveDate::parse_from_str(str, fmt)
 }
