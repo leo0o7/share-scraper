@@ -1,6 +1,8 @@
 use scraper::ElementRef;
+use serde::{Deserialize, Serialize};
+use sqlx::{Decode, FromRow};
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Isin {
     pub country: String,
     pub nna: String,
@@ -29,10 +31,16 @@ impl Isin {
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShareIsin {
-    pub name: String,
+    pub share_name: String,
     pub isin: Isin,
+}
+
+#[derive(Debug, FromRow, Decode)]
+pub struct DBShareIsin {
+    pub share_name: Option<String>,
+    pub isin: Option<String>,
 }
 
 impl ShareIsin {
@@ -41,7 +49,7 @@ impl ShareIsin {
             None
         } else {
             Isin::new(isin_str).map(|isin| ShareIsin {
-                name: name.to_string(),
+                share_name: name.to_string(),
                 isin,
             })
         }
@@ -64,6 +72,15 @@ impl ShareIsin {
             return ShareIsin::new(&name, &isin_str);
         };
 
+        None
+    }
+
+    pub fn from_db(share_isin_db: DBShareIsin) -> Option<ShareIsin> {
+        if let (Some(share_name), Some(isin_str)) = (share_isin_db.share_name, share_isin_db.isin) {
+            if let Some(isin) = Isin::new(&isin_str) {
+                return Some(ShareIsin { share_name, isin });
+            }
+        }
         None
     }
 }
