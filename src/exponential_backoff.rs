@@ -26,13 +26,16 @@ where
         match action().await {
             BackoffMessage::Return(res) => {
                 if debug {
-                    println!("Successfully completed after {try_count} retries.");
-                    println!("Time elapsed {}", get_elapsed_time(start_time));
+                    println!(
+                        "Successfully completed after {try_count} retries. Time elapsed {}",
+                        get_elapsed_time(start_time)
+                    );
                 }
                 return Some(res);
             }
             BackoffMessage::Retry => {
                 try_count += 1;
+
                 if try_count > MAX_RETRIES {
                     if debug {
                         println!("Reached max retries. Exiting.");
@@ -40,26 +43,35 @@ where
                     break;
                 }
 
-                let wait_time = 2u64.pow(try_count) * 100;
+                let wait_time = (2u64.pow(try_count.min(10)) * 100).min(30_000);
+
                 if debug {
                     println!(
-                        "Retry {try_count}/{MAX_RETRIES}. Waiting for {} ms before retrying...",
-                        wait_time
+                        "Retry {}/{} - Waiting for {} ms",
+                        try_count, MAX_RETRIES, wait_time
                     );
                 }
                 sleep(Duration::from_millis(wait_time)).await;
             }
+
             BackoffMessage::Exit => {
-                println!("Exiting after {try_count} retries.");
-                println!("Time elapsed {}", get_elapsed_time(start_time));
+                if debug {
+                    println!(
+                        "Exiting after {try_count} retries. Time elapsed {}",
+                        get_elapsed_time(start_time)
+                    );
+                }
+
                 return None;
             }
         }
     }
 
     if debug {
-        println!("Max retries exhausted.");
-        println!("Time elapsed {}", get_elapsed_time(start_time));
+        println!(
+            "Max retries exhausted. Time elapsed {}",
+            get_elapsed_time(start_time)
+        );
     }
     None
 }

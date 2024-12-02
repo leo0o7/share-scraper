@@ -1,23 +1,22 @@
 use crate::shares::models::ElementRef;
-use crate::shares::parsers::DefaultParse;
+use crate::shares::models::ScrapableStruct;
+use crate::shares::parsers::SafeParse;
 use crate::shares::selectors::select_for_prop;
-use derivative::Derivative;
+use crate::shares::ShareIsin;
 use serde::{Deserialize, Serialize};
 
-use crate::generate_from_element;
-#[derive(Derivative, Debug, Serialize, Deserialize)]
-#[derivative(Default)]
+use crate::generate_scrapable_struct;
+
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct MarketInformation {
     pub isin: String,
-    #[derivative(Default(value = "\"N/A\".to_string()"))]
-    pub super_sector: String,
-    #[derivative(Default(value = "\"N/A\".to_string()"))]
-    pub mercato_segmento: String,
-    pub capitalizzazione_di_mercato: f64,
-    pub lotto_minimo: f64,
+    pub super_sector: Option<String>,
+    pub mercato_segmento: Option<String>,
+    pub capitalizzazione_di_mercato: Option<f64>,
+    pub lotto_minimo: Option<f64>,
 }
 
-generate_from_element!(MarketInformation, {
+generate_scrapable_struct!(MarketInformation, {
     super_sector: String ,
     mercato_segmento: String,
     capitalizzazione_di_mercato: f64,

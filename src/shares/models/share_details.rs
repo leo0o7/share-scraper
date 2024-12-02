@@ -1,21 +1,20 @@
 use crate::shares::models::ElementRef;
-use crate::shares::parsers::DefaultParse;
+use crate::shares::models::ScrapableStruct;
+use crate::shares::parsers::SafeParse;
 use crate::shares::selectors::select_for_prop;
-use derivative::Derivative;
+use crate::shares::ShareIsin;
 use serde::{Deserialize, Serialize};
 
-use crate::generate_from_element;
+use crate::generate_scrapable_struct;
 
-#[derive(Derivative, Debug, Serialize, Deserialize)]
-#[derivative(Default)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct ShareDetails {
     pub isin: String,
-    pub id_strumento: f64,
-    #[derivative(Default(value = "\"N/A\".to_string()"))]
-    pub codice_alfanumerico: String,
+    pub id_strumento: Option<f64>,
+    pub codice_alfanumerico: Option<String>,
 }
 
-generate_from_element!(ShareDetails, {
+generate_scrapable_struct!(ShareDetails, {
     id_strumento: f64,
     codice_alfanumerico: String,
 });

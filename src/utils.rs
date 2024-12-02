@@ -1,8 +1,25 @@
-use crate::db::connect;
 use crate::db::utils::insert_all_isins;
+use crate::db::{
+    connect,
+    utils::{insert_all_shares, query_all_isins},
+};
 use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
 use crate::isins::scrape_all_isins;
+use crate::shares::scrape_all_shares;
 use std::time::SystemTime;
+
+pub async fn scrape_and_insert_all_shares() {
+    let pool = match connect().await {
+        Ok(pool) => pool,
+        Err(e) => panic!("Couldn't connect to DB cause of {e}"),
+    };
+
+    let share_isins = query_all_isins(&pool).await.unwrap();
+
+    let shares = scrape_all_shares(share_isins).await;
+
+    insert_all_shares(shares, &pool).await;
+}
 
 pub async fn scrape_and_insert_all_isins() {
     let isins = scrape_all_isins().await;
@@ -27,10 +44,13 @@ pub async fn get_page_text(url: &str) -> Option<String> {
                 Ok(res) => match res.status() {
                     reqwest::StatusCode::OK => BackoffMessage::Return(res),
                     reqwest::StatusCode::TOO_MANY_REQUESTS => BackoffMessage::Retry,
-                    _ => BackoffMessage::Exit,
+                    _ => {
+                        println!("Exiting, status code {}", res.status());
+                        BackoffMessage::Exit
+                    }
                 },
                 Err(e) => {
-                    eprintln!("Failed to fetch page at url {} cause {}", url, e);
+                    eprintln!("Network error fetching page at url {}: {}", url, e);
                     BackoffMessage::Exit
                 }
             }
@@ -38,18 +58,18 @@ pub async fn get_page_text(url: &str) -> Option<String> {
         false,
     )
     .await
-    .ok_or("Failed to isin fetch page");
+    .ok_or("Failed to fetch page at {url}");
 
     let res_txt = match page_response.ok()?.text().await {
         Ok(txt) => txt,
         Err(e) => {
-            println!("Failed to read page {}", e);
+            eprintln!("Failed to read page text {}", e);
             return None;
         }
     };
 
     if res_txt.is_empty() {
-        eprintln!("Text at url {} couldn't be fetched", url);
+        eprintln!("Text at url {} couldn't be fetched or isn't present", url);
         return None;
     }
 

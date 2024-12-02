@@ -2,12 +2,10 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use scraper::Html;
 use types::ShareIsin;
 
-use crate::{
-    exponential_backoff::{exponential_backoff, BackoffMessage},
-    utils::get_page_text,
-};
+use crate::utils::get_page_text;
 
 pub mod types;
+
 pub async fn scrape_all_isins() -> Vec<ShareIsin> {
     let mut tasks = FuturesUnordered::new();
 
