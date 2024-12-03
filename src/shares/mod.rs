@@ -5,6 +5,10 @@ use models::ScrapableStruct;
 use models::Share;
 use scraper::Html;
 use tokio::time::timeout;
+use tracing::error;
+use tracing::info;
+use tracing::info_span;
+use tracing::Instrument;
 
 use crate::{isins::types::ShareIsin, utils::get_page_text};
 
@@ -21,10 +25,9 @@ pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> Vec<Share> {
 
     let mut res: Vec<Share> = Vec::new();
 
-    let mut curr_num = 0;
-    let share_num = tasks.len();
-
-    while let Some(result) = tasks.next().await {
+    let mut curr_share = 0;
+    let total_shares = tasks.len();
+    while let Some(result) = tasks.next().instrument(info_span!("scraping_share")).await {
         // match serde_json::to_string_pretty(&result) {
         //     Ok(formatted_share) => {
         //         println!("Scraped Share Information:\n{}", formatted_share);
@@ -34,21 +37,25 @@ pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> Vec<Share> {
         //         println!("Fallback debug print:\n{:#?}", result);
         //     }
         // }
-        curr_num += 1;
-        println!("Finished scraping share {}/{}", curr_num, share_num);
-        // print!("\rScraping share {}/{}", curr_num, share_num);
-        // let _ = std::io::stdout().flush();
+        curr_share += 1;
+        info!("Scraping share {}/{}", curr_share, total_shares);
         res.push(result);
     }
-    println!("Scraped {} shares.", res.len());
+    info!("Scraped a total of {} shares.", res.len());
     res
 }
 
 pub async fn scrape_share_with_max_duration(share_isin: ShareIsin, max_duration: u64) -> Share {
     match timeout(Duration::from_secs(max_duration), scrape_share(&share_isin)).await {
-        Ok(res) => res,
+        Ok(res) => {
+            info!("Finished scraping share {:?}", share_isin.isin.get_str());
+            res
+        }
         Err(_) => {
-            eprintln!("Operation timed out");
+            error!(
+                "Operation timed out on share {:?}",
+                share_isin.isin.get_str()
+            );
             Share::with_isin(&share_isin)
         }
     }
@@ -61,9 +68,10 @@ pub async fn scrape_share(share_isin: &ShareIsin) -> Share {
         isin.get_str()
     );
 
-    // println!("Scraping share at {url}");
-
-    let res_txt = get_page_text(&url).await.unwrap_or_default();
+    let res_txt = get_page_text(&url)
+        .instrument(info_span!("fetching_page"))
+        .await
+        .unwrap_or_default();
 
     parse_page(res_txt, &share_isin).unwrap_or_else(|| Share::with_isin(share_isin))
 }

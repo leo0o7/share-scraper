@@ -14,6 +14,7 @@ use scraper::ElementRef;
 use serde::{Deserialize, Serialize};
 use share_details::ShareDetails;
 use sqlx::prelude::FromRow;
+use tracing::{info, warn};
 
 pub trait ScrapableStruct {
     fn from_element(share_isin: &ShareIsin, table: ElementRef) -> Self;
@@ -31,6 +32,7 @@ pub struct Share {
 
 impl ScrapableStruct for Share {
     fn with_isin(share_isin: &ShareIsin) -> Self {
+        warn!("Creating empty share, {}", share_isin.isin.get_str());
         Share {
             share_id: share_isin.clone(),
             share_details: ShareDetails::with_isin(share_isin),
@@ -40,6 +42,10 @@ impl ScrapableStruct for Share {
         }
     }
     fn from_element(share_isin: &ShareIsin, table: ElementRef) -> Self {
+        info!(
+            "Creating full share from elemnt {}",
+            share_isin.isin.get_str()
+        );
         Share {
             share_id: share_isin.clone(),
             share_details: ShareDetails::from_element(share_isin, table),

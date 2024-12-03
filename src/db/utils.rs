@@ -1,5 +1,6 @@
 use futures::{stream::FuturesUnordered, StreamExt};
 use sqlx::{query, query_as, Pool, Postgres};
+use tracing::{error, info, info_span, trace, Instrument};
 
 use crate::{
     isins::types::{DBShareIsin, ShareIsin},
@@ -34,17 +35,19 @@ pub async fn insert_isin(isin: ShareIsin, pool: &Pool<Postgres>) -> Result<(), s
 }
 
 pub async fn query_all_isins(pool: &Pool<Postgres>) -> Result<Vec<ShareIsin>, sqlx::Error> {
+    info!("Querying all isins from db");
     let db_res = query_as!(DBShareIsin, "SELECT * FROM share_isins")
         .fetch_all(pool)
         .await?;
 
     let share_isins: Vec<ShareIsin> = db_res.into_iter().filter_map(ShareIsin::from_db).collect();
+    info!("Got a total of {} from db", share_isins.len());
 
     Ok(share_isins)
 }
 
 pub async fn insert_all_shares(shares: Vec<Share>, pool: &Pool<Postgres>) {
-    println!("Total Shares found: {}", shares.len());
+    info!("Inserting a total of {} Shares", shares.len());
 
     let mut tasks = FuturesUnordered::new();
 
@@ -54,13 +57,11 @@ pub async fn insert_all_shares(shares: Vec<Share>, pool: &Pool<Postgres>) {
 
     let mut curr_num = 0;
     let share_num = tasks.len();
-    while let Some(res) = tasks.next().await {
+    while let Some(res) = tasks.next().instrument(info_span!("inserting_share")).await {
         curr_num += 1;
-        // print!("\rInserting share {}/{}", curr_num, share_num);
-        // let _ = std::io::stdout().flush();
-        println!("Inserting share {}/{}", curr_num, share_num);
+        info!("Inserting share {}/{}", curr_num, share_num);
         if let Err(e) = res {
-            eprintln!("Unable to insert Share, {e}");
+            error!("Unable to insert Share, {}", e);
         }
     }
 }
@@ -73,6 +74,10 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
     let price_data = share.price_data;
     let performance_metrics = share.performance_metrics;
 
+    info!(
+        "Inserting ShareDetails for {}",
+        share.share_id.isin.get_str()
+    );
     query!(
         r#"
         INSERT INTO share_details (isin, id_strumento, codice_alfanumerico)
@@ -88,6 +93,10 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
     .execute(&mut *tx)
     .await?;
 
+    info!(
+        "Inserting MarketInformation for {}",
+        share.share_id.isin.get_str()
+    );
     query!(
         r#"
         INSERT INTO market_information (isin, super_sector, mercato_segmento, capitalizzazione_di_mercato, lotto_minimo)
@@ -107,6 +116,7 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
     .execute(&mut *tx)
     .await?;
 
+    info!("Inserting PriceData for {}", share.share_id.isin.get_str());
     query!(
         r#"
         INSERT INTO price_data (
@@ -172,6 +182,10 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
     .execute(&mut *tx)
     .await?;
 
+    info!(
+        "Inserting PerformanceMetrics for {}",
+        share.share_id.isin.get_str()
+    );
     query!(
         r#"
         INSERT INTO performance_metrics (isin, performance_1_mese, performance_6_mesi, performance_1_anno)
@@ -189,9 +203,22 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
     .execute(&mut *tx)
     .await?;
 
-    tx.commit().await?;
-
-    Ok(())
+    match tx.commit().await {
+        Ok(_) => {
+            info!(
+                "Successfully commited transition for {}",
+                share.share_id.isin.get_str()
+            );
+            Ok(())
+        }
+        Err(e) => {
+            error!(
+                "Error commiting transition for {}",
+                share.share_id.isin.get_str()
+            );
+            Err(e)
+        }
+    }
 }
 
 pub async fn get_share_by_isin(

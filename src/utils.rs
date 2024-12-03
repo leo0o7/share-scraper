@@ -1,3 +1,5 @@
+use tracing::{debug, debug_span, error, info, info_span, instrument, warn, Instrument};
+
 use crate::db::utils::insert_all_isins;
 use crate::db::{
     connect,
@@ -8,10 +10,16 @@ use crate::isins::scrape_all_isins;
 use crate::shares::scrape_all_shares;
 use std::time::SystemTime;
 
+#[instrument]
 pub async fn scrape_and_insert_all_shares() {
+    info!("Started scraping and inserting all shares");
+
     let pool = match connect().await {
         Ok(pool) => pool,
-        Err(e) => panic!("Couldn't connect to DB cause of {e}"),
+        Err(e) => {
+            error!("Couldn't connect to DB cause of {e}");
+            panic!()
+        }
     };
 
     let share_isins = query_all_isins(&pool).await.unwrap();
@@ -38,38 +46,45 @@ pub fn get_elapsed_time(time: SystemTime) -> u64 {
 }
 
 pub async fn get_page_text(url: &str) -> Option<String> {
-    let page_response = exponential_backoff(
-        || async {
-            match reqwest::get(url).await {
-                Ok(res) => match res.status() {
-                    reqwest::StatusCode::OK => BackoffMessage::Return(res),
-                    reqwest::StatusCode::TOO_MANY_REQUESTS => BackoffMessage::Retry,
-                    _ => {
-                        println!("Exiting, status code {}", res.status());
-                        BackoffMessage::Exit
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Network error fetching page at url {}: {}", url, e);
+    let page_response = exponential_backoff(|| async {
+        match reqwest::get(url).await {
+            Ok(res) => match res.status() {
+                reqwest::StatusCode::OK => {
+                    debug!("Returning text for url {url}");
+                    BackoffMessage::Return(res)
+                }
+                reqwest::StatusCode::TOO_MANY_REQUESTS
+                | reqwest::StatusCode::BAD_GATEWAY
+                | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                | reqwest::StatusCode::GATEWAY_TIMEOUT => {
+                    debug!("Retrying for url {url}");
+                    BackoffMessage::Retry
+                }
+                _ => {
+                    error!("Exiting, status code {}", res.status());
                     BackoffMessage::Exit
                 }
+            },
+            Err(e) => {
+                error!("Network error fetching page at url {}: {}", url, e);
+                BackoffMessage::Exit
             }
-        },
-        false,
-    )
+        }
+    })
+    .instrument(debug_span!("exponential_backoff"))
     .await
-    .ok_or("Failed to fetch page at {url}");
+    .ok_or("");
 
     let res_txt = match page_response.ok()?.text().await {
         Ok(txt) => txt,
         Err(e) => {
-            eprintln!("Failed to read page text {}", e);
+            warn!("Failed to read page text at url {}: {}", url, e);
             return None;
         }
     };
 
     if res_txt.is_empty() {
-        eprintln!("Text at url {} couldn't be fetched or isn't present", url);
+        warn!("Text at url {} couldn't be fetched or isn't present", url);
         return None;
     }
 
