@@ -1,4 +1,3 @@
-use crate::utils::get_elapsed_time;
 use std::{
     future,
     time::{Duration, SystemTime},
@@ -6,6 +5,8 @@ use std::{
 
 use tokio::time::sleep;
 use tracing::debug;
+
+use crate::utils::get_elapsed_time;
 
 const MAX_RETRIES: u32 = 5;
 

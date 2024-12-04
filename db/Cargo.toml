@@ -1,0 +1,12 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenv = "0.15.0"
+sqlx = {version = "0.8.2", features = ["runtime-tokio","postgres", "chrono"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+futures = "0.3.31"
+scraper = { path = "../scraper" }

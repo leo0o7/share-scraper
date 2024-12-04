@@ -30,13 +30,13 @@ impl SafeParse<NaiveDateTime> for ElementRef<'_> {
     fn safe_parse(&self) -> Option<NaiveDateTime> {
         self.text()
             .next()
-            .and_then(|text| parse_datetime(&text).ok())
+            .and_then(|text| parse_datetime(text).ok())
     }
 }
 
 impl SafeParse<u64> for ElementRef<'_> {
     fn safe_parse(&self) -> Option<u64> {
-        self.text().next().and_then(|text| parse_int(&text).ok())
+        self.text().next().and_then(|text| parse_int(text).ok())
     }
 }
 
@@ -44,11 +44,11 @@ impl SafeParse<PriceDateReference> for ElementRef<'_> {
     fn safe_parse(&self) -> Option<PriceDateReference> {
         let price_date_str: String = self.default_parse();
 
-        price_date_str.split_once(" - ").and_then(|tuple| {
+        price_date_str.split_once(" - ").map(|tuple| {
             let price = parse_float(tuple.0).ok();
             let date = parse_date(tuple.1).ok();
 
-            Some(PriceDateReference { price, date })
+            PriceDateReference { price, date }
         })
     }
 }
@@ -57,21 +57,18 @@ impl SafeParse<PriceDateTimeReference> for ElementRef<'_> {
     fn safe_parse(&self) -> Option<PriceDateTimeReference> {
         let price_datetime_str: String = self.default_parse();
 
-        price_datetime_str.split_once("-").and_then(|tuple| {
+        price_datetime_str.split_once("-").map(|tuple| {
             let price = parse_float(tuple.0.trim()).ok();
             let datetime = parse_datetime(tuple.1.trim()).ok();
 
-            Some(PriceDateTimeReference { price, datetime })
+            PriceDateTimeReference { price, datetime }
         })
     }
 }
 
 impl DefaultParse<f64> for ElementRef<'_> {
     fn default_parse(&self) -> f64 {
-        self.text()
-            .next()
-            .and_then(|text| parse_float(text).ok())
-            .unwrap_or_default()
+        self.safe_parse().unwrap_or_default()
     }
 }
 
@@ -83,55 +80,25 @@ impl DefaultParse<String> for ElementRef<'_> {
 
 impl DefaultParse<NaiveDateTime> for ElementRef<'_> {
     fn default_parse(&self) -> NaiveDateTime {
-        self.text()
-            .next()
-            .and_then(|text| parse_datetime(&text).ok())
-            .unwrap_or_default()
+        self.safe_parse().unwrap_or_default()
     }
 }
 
 impl DefaultParse<u64> for ElementRef<'_> {
     fn default_parse(&self) -> u64 {
-        self.safe_parse().unwrap_or(0)
+        self.safe_parse().unwrap_or_default()
     }
 }
 
 impl DefaultParse<PriceDateReference> for ElementRef<'_> {
     fn default_parse(&self) -> PriceDateReference {
         self.safe_parse().unwrap_or_default()
-        // let price_date_str: String = self.default_parse();
-        //
-        // price_date_str
-        //     .split_once(" - ")
-        //     .and_then(|tuple| {
-        //         let price = parse_float(tuple.0).unwrap_or(0.0);
-        //         let date = parse_date(tuple.1).unwrap_or(NaiveDate::default());
-        //
-        //         Some(PriceDateReference {
-        //             price: Some(price),
-        //             date: Some(date),
-        //         })
-        //     })
-        //     .unwrap_or_default()
     }
 }
 
 impl DefaultParse<PriceDateTimeReference> for ElementRef<'_> {
     fn default_parse(&self) -> PriceDateTimeReference {
-        let price_datetime_str: String = self.default_parse();
-
-        price_datetime_str
-            .split_once("-")
-            .and_then(|tuple| {
-                let price = parse_float(tuple.0.trim()).unwrap_or(0.0);
-                let datetime = parse_datetime(tuple.1.trim()).unwrap_or(NaiveDateTime::default());
-
-                Some(PriceDateTimeReference {
-                    price: Some(price),
-                    datetime: Some(datetime),
-                })
-            })
-            .unwrap_or_default()
+        self.safe_parse().unwrap_or_default()
     }
 }
 

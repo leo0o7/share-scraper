@@ -1,0 +1,10 @@
+[package]
+name = "scraper_utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+db = { path = "../db/" }
+scraper = { path = "../scraper/" }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

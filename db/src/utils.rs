@@ -1,8 +1,8 @@
 use futures::{stream::FuturesUnordered, StreamExt};
 use sqlx::{query, query_as, Pool, Postgres};
-use tracing::{error, info, info_span, trace, Instrument};
+use tracing::{error, info, info_span, Instrument};
 
-use crate::{
+use scraper::{
     isins::types::{DBShareIsin, ShareIsin},
     shares::models::{Share, ShareFullInfo},
 };

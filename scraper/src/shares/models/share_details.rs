@@ -1,12 +1,6 @@
-use crate::shares::models::ElementRef;
-use crate::shares::models::ScrapableStruct;
-use crate::shares::parsers::SafeParse;
-use crate::shares::selectors::select_for_prop;
-use crate::shares::ShareIsin;
-use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
-
+use super::gen_macro::*;
 use crate::generate_scrapable_struct;
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct ShareDetails {

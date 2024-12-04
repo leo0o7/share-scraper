@@ -1,6 +1,7 @@
 use scraper::ElementRef;
 use serde::{Deserialize, Serialize};
 use sqlx::{Decode, FromRow};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Isin {
@@ -55,6 +56,7 @@ impl ShareIsin {
         }
     }
     pub fn from_element(isin_element: ElementRef) -> Option<ShareIsin> {
+        info!("Creating ShareIsin from element");
         let isin_share_name_selector = scraper::Selector::parse("span.t-text").unwrap();
 
         let share_link_attr = isin_element.value().attr("href");
@@ -69,7 +71,7 @@ impl ShareIsin {
                 .unwrap_or_default();
             let name = name_element.text().next().unwrap_or_default();
 
-            return ShareIsin::new(&name, &isin_str);
+            return ShareIsin::new(name, &isin_str);
         };
 
         None

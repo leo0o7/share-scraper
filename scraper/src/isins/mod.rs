@@ -1,5 +1,6 @@
 use futures::{stream::FuturesUnordered, StreamExt};
 use scraper::Html;
+use tracing::{info, info_span, Instrument};
 use types::ShareIsin;
 
 use crate::utils::get_page_text;
@@ -11,7 +12,12 @@ pub async fn scrape_all_isins() -> Vec<ShareIsin> {
 
     for letter in b'A'..=b'Z' {
         for page in 1..=5 {
-            tasks.push(scrape_isins(letter as char, page));
+            let letter = letter as char;
+            tasks.push(scrape_isins(letter, page).instrument(info_span!(
+                "scraping isins",
+                letter = letter.to_string(),
+                page = page
+            )));
         }
     }
 
@@ -29,21 +35,22 @@ pub async fn scrape_all_isins() -> Vec<ShareIsin> {
 async fn scrape_isins(letter: char, page: u8) -> Option<Vec<ShareIsin>> {
     let url = format!("https://www.borsaitaliana.it/borsa/azioni/listino-a-z.html?initial={letter}&page={page}&lang=it");
 
-    println!("scraping isins at {letter} page {page}");
+    info!("Scraping ISINs");
 
-    let res_txt = get_page_text(&url).await.unwrap();
+    let res_txt = get_page_text(&url)
+        .instrument(info_span!("fetching_page"))
+        .await?;
 
     let isins = parse_page(res_txt);
 
-    return Some(isins);
+    Some(isins)
 }
 
 fn parse_page(res_txt: String) -> Vec<ShareIsin> {
     let doc = Html::parse_document(&res_txt);
     let isin_element_selector = scraper::Selector::parse("a.u-hidden.-xs").unwrap();
 
-    return doc
-        .select(&isin_element_selector)
+    doc.select(&isin_element_selector)
         .filter_map(ShareIsin::from_element)
-        .collect();
+        .collect()
 }

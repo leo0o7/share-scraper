@@ -1,19 +1,17 @@
+[workspace]
+members = [ "db",
+  "scraper", "scraper_utils",
+  "server",
+]
+
 [package]
-name = "share_scraping"
+name = "share_service"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-reqwest = { version = "0.12.9", features = ["blocking"] }
-scraper = "0.21.0"
-sqlx = {version = "0.8.2", features = ["runtime-tokio","postgres", "chrono"] }
-tokio = { version = "1", features = ["full"] }
-dotenv = "0.15.0"
-futures = "0.3.31"
-chrono = { version = "0.4.38", features = ["serde"] }
-regex = "1.11.1"
-derivative = "2.2.0"
-serde = "1.0.215"
-serde_json = "1.0.133"
+scraper_utils = { path = "scraper_utils" }
+tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+

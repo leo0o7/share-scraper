@@ -1,13 +1,7 @@
-use crate::shares::models::ElementRef;
-use crate::shares::models::ScrapableStruct;
-use crate::shares::parsers::SafeParse;
-use crate::shares::selectors::select_for_prop;
-use crate::shares::ShareIsin;
+use super::gen_macro::*;
+use crate::generate_scrapable_struct;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
-
-use crate::generate_scrapable_struct;
 
 use super::{PriceDateReference, PriceDateTimeReference};
 
