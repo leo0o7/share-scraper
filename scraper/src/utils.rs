@@ -51,9 +51,9 @@ pub async fn get_page_text(url: &str) -> Option<String> {
     Some(res_txt)
 }
 
-pub fn get_elapsed_time(time: SystemTime) -> u64 {
+pub fn get_elapsed_time(time: SystemTime) -> u128 {
     match time.elapsed() {
-        Ok(duration) => duration.as_secs(),
+        Ok(duration) => duration.as_nanos(),
         // pretty bad if we can't do that
         Err(_) => panic!("Error calculating time elapsed"),
     }

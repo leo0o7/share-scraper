@@ -4,7 +4,7 @@ use tracing::{error, info, info_span, Instrument};
 
 use scraper::{
     isins::types::{DBShareIsin, ShareIsin},
-    shares::models::{Share, ShareFullInfo},
+    shares::models::share::{Share, ShareFullInfo},
 };
 
 pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) {
