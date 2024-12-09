@@ -2,10 +2,7 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use sqlx::{query, query_as, Pool, Postgres};
 use tracing::{error, info, info_span, Instrument};
 
-use scraper::{
-    isins::types::{DBShareIsin, ShareIsin},
-    shares::models::share::{Share, ShareFullInfo},
-};
+use scraper::{isins::types::ShareIsin, shares::Share};
 
 pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) {
     println!("Total ISINs found: {}", isins.len());
@@ -36,11 +33,9 @@ pub async fn insert_isin(isin: ShareIsin, pool: &Pool<Postgres>) -> Result<(), s
 
 pub async fn query_all_isins(pool: &Pool<Postgres>) -> Result<Vec<ShareIsin>, sqlx::Error> {
     info!("Querying all isins from db");
-    let db_res = query_as!(DBShareIsin, "SELECT * FROM share_isins")
+    let share_isins: Vec<ShareIsin> = query_as("SELECT share_name, isin FROM share_isins")
         .fetch_all(pool)
         .await?;
-
-    let share_isins: Vec<ShareIsin> = db_res.into_iter().filter_map(ShareIsin::from_db).collect();
     info!("Got a total of {} from db", share_isins.len());
 
     Ok(share_isins)
@@ -224,53 +219,54 @@ pub async fn insert_share(share: Share, pool: &Pool<Postgres>) -> Result<(), sql
 pub async fn get_share_by_isin(
     isin: &str,
     pool: &Pool<Postgres>,
-) -> Result<Option<ShareFullInfo>, sqlx::Error> {
-    query_as!(
-        ShareFullInfo,
+) -> Result<Option<Share>, sqlx::Error> {
+    info!("Getting share with isin {}", isin);
+
+    query_as(
         r#"
-         SELECT
-             si.isin,
-             si.share_name,
-             sd.id_strumento,
-             sd.codice_alfanumerico,
-             mi.super_sector,
-             mi.mercato_segmento,
-             mi.capitalizzazione_di_mercato,
-             mi.lotto_minimo,
-             pd.fase_di_mercato,
-             pd.prezzo_ultimo_contratto,
-             pd.var_percentuale,
-             pd.var_assoluta,
-             pd.pr_medio_progr,
-             pd.data_ora_ultimo_contratto,
-             pd.quantita_ultimo,
-             pd.quantita_totale,
-             pd.numero_contratti,
-             pd.controvalore,
-             pd.max_oggi,
-             pd.max_anno,
-             pd.max_anno_date,
-             pd.min_oggi,
-             pd.min_anno,
-             pd.min_anno_date,
-             pd.chiusura_precedente,
-             pd.prezzo_riferimento,
-             pd.data_ora_prezzo_rifermento,
-             pd.prezzo_ufficiale,
-             pd.data_prezzo_ufficiale,
-             pd.apertura_odierna,
-             pm.performance_1_mese,
-             pm.performance_6_mesi,
-             pm.performance_1_anno
-         FROM share_isins si
-         LEFT JOIN share_details sd ON si.isin = sd.isin
-         LEFT JOIN market_information mi ON si.isin = mi.isin
-         LEFT JOIN price_data pd ON si.isin = pd.isin
-         LEFT JOIN performance_metrics pm ON si.isin = pm.isin
-         WHERE si.isin = $1
-         "#,
-        isin
+     SELECT
+         si.isin,
+         si.share_name,
+         sd.id_strumento,
+         sd.codice_alfanumerico,
+         mi.super_sector,
+         mi.mercato_segmento,
+         mi.capitalizzazione_di_mercato,
+         mi.lotto_minimo,
+         pd.fase_di_mercato,
+         pd.prezzo_ultimo_contratto,
+         pd.var_percentuale,
+         pd.var_assoluta,
+         pd.pr_medio_progr,
+         pd.data_ora_ultimo_contratto,
+         pd.quantita_ultimo,
+         pd.quantita_totale,
+         pd.numero_contratti,
+         pd.controvalore,
+         pd.max_oggi,
+         pd.max_anno,
+         pd.max_anno_date,
+         pd.min_oggi,
+         pd.min_anno,
+         pd.min_anno_date,
+         pd.chiusura_precedente,
+         pd.prezzo_riferimento,
+         pd.data_ora_prezzo_rifermento,
+         pd.prezzo_ufficiale,
+         pd.data_prezzo_ufficiale,
+         pd.apertura_odierna,
+         pm.performance_1_mese,
+         pm.performance_6_mesi,
+         pm.performance_1_anno
+     FROM share_isins si
+     LEFT JOIN share_details sd ON si.isin = sd.isin
+     LEFT JOIN market_information mi ON si.isin = mi.isin
+     LEFT JOIN price_data pd ON si.isin = pd.isin
+     LEFT JOIN performance_metrics pm ON si.isin = pm.isin
+     WHERE si.isin = $1
+     "#,
     )
+    .bind(isin)
     .fetch_optional(pool)
     .await
 }

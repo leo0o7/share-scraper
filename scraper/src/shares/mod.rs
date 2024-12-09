@@ -1,21 +1,16 @@
-use std::time::Duration;
-
-use futures::{stream::FuturesUnordered, StreamExt};
-use models::share::Share;
-use models::ScrapableStruct;
-use property_selector::PropertySelector;
-use scraper::Html;
-use tokio::time::timeout;
-use tracing::error;
-use tracing::info;
-use tracing::info_span;
-use tracing::Instrument;
-
-use crate::{isins::types::ShareIsin, utils::get_page_text};
-
-pub mod models;
+mod models;
 mod parsers;
 mod property_selector;
+pub use models::{share::Share, ScrapableStruct};
+
+use futures::{stream::FuturesUnordered, StreamExt};
+use scraper::Html;
+use std::time::Duration;
+use tokio::time::timeout;
+use tracing::{error, info, info_span, Instrument};
+
+use crate::{get_page_text, isins::types::ShareIsin};
+use property_selector::PropertySelector;
 
 pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> Vec<Share> {
     let mut tasks = FuturesUnordered::new();

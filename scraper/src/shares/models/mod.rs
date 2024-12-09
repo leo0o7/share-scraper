@@ -5,12 +5,11 @@ mod price_data;
 pub mod share;
 mod share_details;
 
-use crate::isins::types::ShareIsin;
-
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
 use super::property_selector::PropertySelector;
+use crate::isins::types::ShareIsin;
 
 pub trait ScrapableStruct {
     fn from_selector(share_isin: &ShareIsin, selector: &PropertySelector) -> Self;

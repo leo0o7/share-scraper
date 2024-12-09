@@ -3,7 +3,7 @@ use scraper::Html;
 use tracing::{info, info_span, Instrument};
 use types::ShareIsin;
 
-use crate::utils::get_page_text;
+use crate::get_page_text;
 
 pub mod types;
 

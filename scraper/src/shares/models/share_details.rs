@@ -2,7 +2,7 @@ use super::gen_macro::*;
 use crate::generate_scrapable_struct;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, sqlx::FromRow, Debug, Serialize, Deserialize)]
 pub struct ShareDetails {
     pub isin: String,
     pub id_strumento: Option<f64>,

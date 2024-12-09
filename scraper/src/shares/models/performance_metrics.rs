@@ -2,7 +2,7 @@ use super::gen_macro::*;
 use crate::generate_scrapable_struct;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(sqlx::FromRow, Debug, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
     pub isin: String,
     pub performance_1_mese: Option<f64>,

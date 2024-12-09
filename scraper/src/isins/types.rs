@@ -1,6 +1,5 @@
 use scraper::ElementRef;
 use serde::{Deserialize, Serialize};
-use sqlx::{Decode, FromRow};
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -10,21 +9,33 @@ pub struct Isin {
     pub check: u8,
 }
 
+impl TryFrom<String> for Isin {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() == 12 {
+            let country = value[0..2].to_string();
+            let nna = value[2..11].to_string();
+            match value[11..12].parse::<u8>() {
+                Ok(check) => Ok(Isin {
+                    country,
+                    nna,
+                    check,
+                }),
+                Err(_) => Err(format!("Isin can't be parsed from {}", value)),
+            }
+        } else {
+            Err(format!(
+                "Isin can't be parsed from a string of lenght {}",
+                value.len()
+            ))
+        }
+    }
+}
+
 impl Isin {
     pub fn new(isin_str: &str) -> Option<Isin> {
-        if isin_str.len() == 12 {
-            let country = isin_str[0..2].to_string();
-            let nna = isin_str[2..11].to_string();
-            let check = isin_str[11..12].parse::<u8>().ok()?;
-
-            Some(Isin {
-                country,
-                nna,
-                check,
-            })
-        } else {
-            None
-        }
+        Isin::try_from(isin_str.to_string()).ok()
     }
 
     pub fn get_str(&self) -> String {
@@ -32,16 +43,11 @@ impl Isin {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, sqlx::FromRow, Clone, Serialize, Deserialize)]
 pub struct ShareIsin {
     pub share_name: String,
+    #[sqlx(try_from = "String")]
     pub isin: Isin,
-}
-
-#[derive(Debug, FromRow, Decode)]
-pub struct DBShareIsin {
-    pub share_name: Option<String>,
-    pub isin: Option<String>,
 }
 
 impl ShareIsin {
@@ -55,6 +61,7 @@ impl ShareIsin {
             })
         }
     }
+
     pub fn from_element(isin_element: ElementRef) -> Option<ShareIsin> {
         info!("Creating ShareIsin from element");
         let isin_share_name_selector = scraper::Selector::parse("span.t-text").unwrap();
@@ -74,15 +81,6 @@ impl ShareIsin {
             return ShareIsin::new(name, &isin_str);
         };
 
-        None
-    }
-
-    pub fn from_db(share_isin_db: DBShareIsin) -> Option<ShareIsin> {
-        if let (Some(share_name), Some(isin_str)) = (share_isin_db.share_name, share_isin_db.isin) {
-            if let Some(isin) = Isin::new(&isin_str) {
-                return Some(ShareIsin { share_name, isin });
-            }
-        }
         None
     }
 }
