@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+db = { path = "../db/"}
+scraper = { path = "../scraper/"}
+axum = "0.7.9"
+sqlx = {version = "0.8.2", features = ["runtime-tokio", "postgres" , "chrono"] }
+tokio = { version = "1.42.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+serde = "1.0.215"
