@@ -1,3 +1,4 @@
+pub mod share_queries;
 pub mod utils;
 
 use dotenv::dotenv;
