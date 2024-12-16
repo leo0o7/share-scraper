@@ -1,5 +1,5 @@
 mod models;
-mod parsers;
+pub mod parsers;
 mod property_selector;
 pub use models::{share::Share, ScrapableStruct};
 
@@ -7,76 +7,90 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use scraper::Html;
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 
-use crate::{get_page_text, isins::types::ShareIsin};
+use crate::{
+    errors::{ScraperResult, ScrapingError},
+    get_page_text,
+    isins::types::ShareIsin,
+    metrics::{ScrapingMetrics, WithMetrics},
+};
 use property_selector::PropertySelector;
 
-pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> Vec<Share> {
+pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> WithMetrics<Vec<Share>> {
+    let mut metrics = ScrapingMetrics::empty();
+    let total_shares = share_isins.len();
+    metrics.total = total_shares as i32;
+
     let mut tasks = FuturesUnordered::new();
 
-    for share_isin in share_isins {
-        let isin_str = &share_isin.isin.get_str();
+    for (i, share_isin) in share_isins.into_iter().enumerate() {
+        let isin_str = &share_isin.isin.to_string();
         tasks.push(
-            scrape_share_with_max_duration(share_isin, 5 * 60)
-                .instrument(info_span!("scraping_share", isin = isin_str)),
+            scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
+                "scraping_share",
+                isin = isin_str,
+                curr = i,
+                total = total_shares,
+            )),
         );
     }
 
     let mut res: Vec<Share> = Vec::new();
 
-    let mut curr_share = 0;
-    let total_shares = tasks.len();
     while let Some(result) = tasks.next().await {
-        // match serde_json::to_string_pretty(&result) {
-        //     Ok(formatted_share) => {
-        //         info!("Scraped Share Information:\n{}", formatted_share);
-        //     }
-        //     Err(e) => {
-        //         eprintln!("Error serializing share: {}", e);
-        //         println!("Fallback debug print:\n{:#?}", result);
-        //     }
-        // }
-        curr_share += 1;
-        info!("Scraping share {}/{}", curr_share, total_shares);
-        res.push(result);
+        match result {
+            Ok(result) => {
+                metrics.successful += 1;
+                res.push(result);
+            }
+            Err(e) => metrics.errors.update(e),
+        };
     }
     info!("Scraped a total of {} shares.", res.len());
-    res
+
+    WithMetrics::new(res, metrics)
 }
 
-pub async fn scrape_share_with_max_duration(share_isin: ShareIsin, max_duration: u64) -> Share {
+pub async fn scrape_share_with_max_duration(
+    share_isin: ShareIsin,
+    max_duration: u64,
+) -> ScraperResult<Share> {
     match timeout(Duration::from_secs(max_duration), scrape_share(&share_isin)).await {
         Ok(res) => {
-            info!("Finished scraping share");
+            if let Err(e) = &res {
+                warn!("Error scraping share {:?}", e);
+            } else {
+                info!("Finished scraping share");
+            }
+
             res
         }
         Err(_) => {
-            error!("Operation timed");
-            Share::with_isin(&share_isin)
+            error!("Operation timed out");
+            Err(ScrapingError::Timeout)
         }
     }
 }
 
-pub async fn scrape_share(share_isin: &ShareIsin) -> Share {
+pub async fn scrape_share(share_isin: &ShareIsin) -> ScraperResult<Share> {
     let isin = &share_isin.isin;
     let url = format!(
         "https://www.borsaitaliana.it/borsa/azioni/dati-completi.html?isin={}&lang=it",
-        isin.get_str()
+        isin
     );
 
     let res_txt = get_page_text(&url)
         .instrument(info_span!("fetching_page"))
-        .await
-        .unwrap_or_default();
+        .await?;
 
-    parse_page(res_txt, share_isin).unwrap_or_else(|| Share::with_isin(share_isin))
+    let share = parse_page(res_txt, share_isin);
+    Ok(share)
 }
 
-fn parse_page(res_txt: String, share_isin: &ShareIsin) -> Option<Share> {
+fn parse_page(res_txt: String, share_isin: &ShareIsin) -> Share {
     let doc = Html::parse_document(&res_txt);
-
     let selector = PropertySelector::new(&doc);
 
-    Some(Share::from_selector(share_isin, &selector))
+    Share::from_selector(share_isin, &selector)
 }

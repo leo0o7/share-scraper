@@ -8,6 +8,7 @@ pub struct PerformanceMetrics {
     pub performance_1_mese: Option<f64>,
     pub performance_6_mesi: Option<f64>,
     pub performance_1_anno: Option<f64>,
+    pub updated_at: NaiveDateTime,
 }
 
 generate_scrapable_struct!(PerformanceMetrics, {

@@ -1,5 +1,6 @@
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
-use sqlx::prelude::FromRow;
+use sqlx::{prelude::FromRow, Row};
 use tracing::info;
 
 use super::{
@@ -14,6 +15,7 @@ pub struct Share {
     pub market_information: MarketInformation,
     pub price_data: PriceData,
     pub performance_metrics: PerformanceMetrics,
+    pub updated_at: NaiveDateTime,
 }
 
 impl ScrapableStruct for Share {
@@ -25,6 +27,7 @@ impl ScrapableStruct for Share {
             market_information: MarketInformation::with_isin(share_isin),
             price_data: PriceData::with_isin(share_isin),
             performance_metrics: PerformanceMetrics::with_isin(share_isin),
+            updated_at: chrono::offset::Utc::now().naive_utc(),
         }
     }
 
@@ -36,6 +39,7 @@ impl ScrapableStruct for Share {
             market_information: MarketInformation::from_selector(share_isin, selector),
             price_data: PriceData::from_selector(share_isin, selector),
             performance_metrics: PerformanceMetrics::from_selector(share_isin, selector),
+            updated_at: chrono::offset::Utc::now().naive_utc(),
         }
     }
 }
@@ -46,6 +50,7 @@ impl FromRow<'_, sqlx::postgres::PgRow> for Share {
         let market_information = MarketInformation::from_row(row)?;
         let price_data = PriceData::from_row(row)?;
         let performance_metrics = PerformanceMetrics::from_row(row)?;
+        let updated_at = row.try_get("updated_at")?;
 
         Ok(Share {
             share_id,
@@ -53,6 +58,7 @@ impl FromRow<'_, sqlx::postgres::PgRow> for Share {
             market_information,
             price_data,
             performance_metrics,
+            updated_at,
         })
     }
 }

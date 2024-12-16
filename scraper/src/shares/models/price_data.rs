@@ -29,6 +29,7 @@ pub struct PriceData {
     pub prezzo_riferimento: Option<PriceDateTimeReference>,
     pub prezzo_ufficiale: Option<PriceDateReference>,
     pub apertura_odierna: Option<f64>,
+    pub updated_at: NaiveDateTime,
 }
 
 impl FromRow<'_, PgRow> for PriceData {
@@ -67,6 +68,7 @@ impl FromRow<'_, PgRow> for PriceData {
                 date: row.try_get("data_prezzo_ufficiale")?,
             }),
             apertura_odierna: row.try_get("apertura_odierna")?,
+            updated_at: row.try_get("updated_at")?,
         })
     }
 }

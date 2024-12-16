@@ -10,6 +10,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+db = { path = "db" }
 scraper_utils = { path = "scraper_utils" }
 tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.41"

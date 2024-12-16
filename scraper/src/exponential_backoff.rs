@@ -1,8 +1,6 @@
-use std::{
-    future,
-    time::{Duration, SystemTime},
-};
+use std::{future, time::Duration};
 
+use chrono::Utc;
 use tokio::time::sleep;
 use tracing::debug;
 
@@ -16,12 +14,17 @@ pub enum BackoffMessage<T> {
     Return(T),
 }
 
-pub async fn exponential_backoff<T, F, Fut>(action: F) -> Option<T>
+pub enum BackoffError {
+    MaxRetries,
+    Exit,
+}
+
+pub async fn exponential_backoff<T, F, Fut>(action: F) -> Result<T, BackoffError>
 where
     F: Fn() -> Fut,
     Fut: future::Future<Output = BackoffMessage<T>>,
 {
-    let start_time = SystemTime::now();
+    let start_time = Utc::now().time();
     let mut try_count = 0;
 
     while try_count <= MAX_RETRIES {
@@ -31,7 +34,7 @@ where
                     "Successfully completed after {try_count} retries. Time elapsed {}",
                     get_elapsed_time(start_time)
                 );
-                return Some(res);
+                return Ok(res);
             }
             BackoffMessage::Retry => {
                 try_count += 1;
@@ -56,7 +59,7 @@ where
                     get_elapsed_time(start_time)
                 );
 
-                return None;
+                return Err(BackoffError::Exit);
             }
         }
     }
@@ -65,5 +68,5 @@ where
         "Max retries exhausted. Time elapsed {}",
         get_elapsed_time(start_time)
     );
-    None
+    Err(BackoffError::MaxRetries)
 }

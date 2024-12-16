@@ -10,3 +10,4 @@ tracing = "0.1.41"
 futures = "0.3.31"
 scraper = { path = "../scraper" }
 serde = "1.0.215"
+chrono = { version = "0.4.38", features = ["serde"] }

@@ -7,6 +7,7 @@ pub struct ShareDetails {
     pub isin: String,
     pub id_strumento: Option<f64>,
     pub codice_alfanumerico: Option<String>,
+    pub updated_at: NaiveDateTime,
 }
 
 generate_scrapable_struct!(ShareDetails, {

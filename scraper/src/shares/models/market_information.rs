@@ -9,6 +9,7 @@ pub struct MarketInformation {
     pub mercato_segmento: Option<String>,
     pub capitalizzazione_di_mercato: Option<f64>,
     pub lotto_minimo: Option<f64>,
+    pub updated_at: NaiveDateTime,
 }
 
 generate_scrapable_struct!(MarketInformation, {

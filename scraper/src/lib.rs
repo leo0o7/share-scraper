@@ -1,14 +1,16 @@
+mod errors;
 pub mod exponential_backoff;
 pub mod isins;
+pub mod metrics;
 pub mod shares;
 
-use std::time::SystemTime;
-
+use chrono::{NaiveTime, Utc};
+use errors::{ScraperResult, ScrapingError};
 use tracing::{debug, debug_span, error, warn, Instrument};
 
 use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
 
-pub async fn get_page_text(url: &str) -> Option<String> {
+pub async fn get_page_text(url: &str) -> ScraperResult<String> {
     let page_response = exponential_backoff(|| async {
         match reqwest::get(url).await {
             Ok(res) => match res.status() {
@@ -43,22 +45,18 @@ pub async fn get_page_text(url: &str) -> Option<String> {
         Ok(txt) => txt,
         Err(e) => {
             warn!("Failed to read page text at url {}: {}", url, e);
-            return None;
+            return Err(ScrapingError::InvalidPage);
         }
     };
 
     if res_txt.is_empty() {
         warn!("Text at url {} couldn't be fetched or isn't present", url);
-        return None;
+        return Err(ScrapingError::InvalidPage);
     }
 
-    Some(res_txt)
+    Ok(res_txt)
 }
 
-pub fn get_elapsed_time(time: SystemTime) -> u128 {
-    match time.elapsed() {
-        Ok(duration) => duration.as_nanos(),
-        // pretty bad if we can't do that
-        Err(_) => panic!("Error calculating time elapsed"),
-    }
+pub fn get_elapsed_time(time: NaiveTime) -> i64 {
+    (Utc::now().time() - time).num_milliseconds()
 }
