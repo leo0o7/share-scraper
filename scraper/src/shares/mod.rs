@@ -3,10 +3,11 @@ pub mod parsers;
 mod property_selector;
 pub use models::{share::Share, ScrapableStruct};
 
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::future::join_all;
+use once_cell::sync::Lazy;
 use scraper::Html;
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::{task, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 
 use crate::{
@@ -17,36 +18,71 @@ use crate::{
 };
 use property_selector::PropertySelector;
 
+static PARSE_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .build()
+        .unwrap()
+});
+
 pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> WithMetrics<Vec<Share>> {
     let mut metrics = ScrapingMetrics::empty();
     let total_shares = share_isins.len();
     metrics.total = total_shares as i32;
 
-    let mut tasks = FuturesUnordered::new();
+    let tasks: Vec<_> = share_isins
+        .into_iter()
+        .enumerate()
+        .map(|(i, share_isin)| {
+            let isin_str = &share_isin.isin.to_string();
+            task::spawn(
+                scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
+                    "scraping_share",
+                    isin = isin_str,
+                    curr = i,
+                    total = total_shares,
+                )),
+            )
+        })
+        .collect();
 
-    for (i, share_isin) in share_isins.into_iter().enumerate() {
-        let isin_str = &share_isin.isin.to_string();
-        tasks.push(
-            scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
-                "scraping_share",
-                isin = isin_str,
-                curr = i,
-                total = total_shares,
-            )),
-        );
-    }
+    let results = join_all(tasks).await;
 
     let mut res: Vec<Share> = Vec::new();
-
-    while let Some(result) = tasks.next().await {
+    for result in results {
         match result {
-            Ok(result) => {
+            Ok(Ok(result)) => {
                 metrics.successful += 1;
                 res.push(result);
             }
-            Err(e) => metrics.errors.update(e),
-        };
+            Ok(Err(e)) => metrics.errors.update(e),
+            Err(e) => error!("task failed {e}"),
+        }
     }
+
+    // let mut tasks = FuturesUnordered::new();
+    //
+    // for (i, share_isin) in share_isins.into_iter().enumerate() {
+    //     let isin_str = &share_isin.isin.to_string();
+    //     tasks.push(
+    //         scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
+    //             "scraping_share",
+    //             isin = isin_str,
+    //             curr = i,
+    //             total = total_shares,
+    //         )),
+    //     );
+    // }
+    //
+    // while let Some(result) = tasks.next().await {
+    //     match result {
+    //         Ok(result) => {
+    //             metrics.successful += 1;
+    //             res.push(result);
+    //         }
+    //         Err(e) => metrics.errors.update(e),
+    //     };
+    // }
     info!("Scraped a total of {} shares.", res.len());
 
     WithMetrics::new(res, metrics)
@@ -80,17 +116,30 @@ pub async fn scrape_share(share_isin: &ShareIsin) -> ScraperResult<Share> {
         isin
     );
 
-    let res_txt = get_page_text(&url)
+    let res_txt = get_page_text(url)
         .instrument(info_span!("fetching_page"))
         .await?;
 
-    let share = parse_page(res_txt, share_isin);
+    let share = parse_page(res_txt, share_isin).await;
     Ok(share)
 }
 
-fn parse_page(res_txt: String, share_isin: &ShareIsin) -> Share {
-    let doc = Html::parse_document(&res_txt);
-    let selector = PropertySelector::new(&doc);
+async fn parse_page(res_txt: String, share_isin: &ShareIsin) -> Share {
+    let share_isin = share_isin.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
 
-    Share::from_selector(share_isin, &selector)
+    PARSE_POOL.spawn(move || {
+        let doc = Html::parse_document(&res_txt);
+        let selector = PropertySelector::new(&doc);
+        let share = Share::from_selector(&share_isin, &selector);
+        let _ = sender.send(share);
+    });
+
+    receiver.await.unwrap()
 }
+// fn parse_page(res_txt: String, share_isin: &ShareIsin) -> Share {
+//     let doc = Html::parse_document(&res_txt);
+//     let selector = PropertySelector::new(&doc);
+//
+//     Share::from_selector(share_isin, &selector)
+// }

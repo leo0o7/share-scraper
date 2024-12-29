@@ -1,8 +1,5 @@
 [workspace]
-members = [ "db",
-  "scraper", "scraper_utils",
-  "server",
-]
+members = ["db", "scraper", "scraper_utils", "server"]
 
 [package]
 name = "share_service"
@@ -15,4 +12,3 @@ scraper_utils = { path = "scraper_utils" }
 tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-

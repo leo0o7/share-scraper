@@ -4,15 +4,34 @@ pub mod isins;
 pub mod metrics;
 pub mod shares;
 
+use std::time::Duration;
+
 use chrono::{NaiveTime, Utc};
 use errors::{ScraperResult, ScrapingError};
-use tracing::{debug, debug_span, error, warn, Instrument};
+use once_cell::sync::Lazy;
+use reqwest::Client;
+use tracing::{debug, debug_span, error, Instrument};
 
 use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
 
-pub async fn get_page_text(url: &str) -> ScraperResult<String> {
+static CLIENT: Lazy<Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(100) // Keep more connections alive
+        .tcp_nodelay(true)
+        .pool_idle_timeout(Duration::from_secs(15))
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .unwrap()
+});
+
+pub async fn get_page_text(url: String) -> ScraperResult<String> {
+    let url = url.as_str();
     let page_response = exponential_backoff(|| async {
-        match reqwest::get(url).await {
+        match CLIENT.get(url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.5")
+            .send().await {
             Ok(res) => match res.status() {
                 reqwest::StatusCode::OK => {
                     debug!("Returning text for url {url}");
@@ -41,20 +60,10 @@ pub async fn get_page_text(url: &str) -> ScraperResult<String> {
     .instrument(debug_span!("exponential_backoff"))
     .await?;
 
-    let res_txt = match page_response.text().await {
-        Ok(txt) => txt,
-        Err(e) => {
-            warn!("Failed to read page text at url {}: {}", url, e);
-            return Err(ScrapingError::InvalidPage);
-        }
-    };
-
-    if res_txt.is_empty() {
-        warn!("Text at url {} couldn't be fetched or isn't present", url);
-        return Err(ScrapingError::InvalidPage);
+    match page_response.text().await {
+        Ok(txt) if !txt.is_empty() => Ok(txt),
+        _ => Err(ScrapingError::InvalidPage),
     }
-
-    Ok(res_txt)
 }
 
 pub fn get_elapsed_time(time: NaiveTime) -> i64 {

@@ -1,10 +1,14 @@
 use std::num::{ParseFloatError, ParseIntError};
 
 use chrono::{NaiveDate, NaiveDateTime};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use scraper::ElementRef;
 
 use super::models::{PriceDateReference, PriceDateTimeReference};
+
+static DOTS_AS_THOUSANDS_SEPARATOR_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(\d{1,3})(\.?\d{3})*(,\d+)?$").unwrap());
 
 pub trait DefaultParse<T> {
     fn default_parse(&self) -> T;
@@ -107,8 +111,6 @@ fn parse_int(str: &str) -> Result<u64, ParseIntError> {
 }
 
 fn parse_float(text: &str) -> Result<f64, ParseFloatError> {
-    let dots_as_thousands_separator = Regex::new(r"^(\d{1,3})(\.?\d{3})*(,\d+)?$").unwrap();
-
     let cleaned = text
         .trim()
         .trim_start_matches("+")
@@ -119,7 +121,7 @@ fn parse_float(text: &str) -> Result<f64, ParseFloatError> {
 
     let cleaned = cleaned.trim_start_matches("-");
 
-    let normalized = if dots_as_thousands_separator.is_match(cleaned) {
+    let normalized = if DOTS_AS_THOUSANDS_SEPARATOR_REGEX.is_match(cleaned) {
         cleaned.replace(".", "").replace(",", ".")
     } else {
         cleaned.replace(",", "")

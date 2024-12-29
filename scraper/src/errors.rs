@@ -16,6 +16,7 @@ impl From<BackoffError> for ScrapingError {
         match err {
             BackoffError::MaxRetries => ScrapingError::MaxRetries,
             BackoffError::Exit => ScrapingError::NetworkError,
+            BackoffError::Timeout => ScrapingError::Timeout,
         }
     }
 }

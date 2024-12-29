@@ -52,7 +52,7 @@ async fn scrape_isins_at_page(letter: char, page: u8) -> WithMetrics<HashSet<Sha
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
 
-    let res_txt = get_page_text(&url)
+    let res_txt = get_page_text(url)
         .instrument(info_span!("fetching_page"))
         .await;
 
