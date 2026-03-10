@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::get_elapsed_time;
 
-const MAX_RETRIES: u32 = 5;
+const MAX_RETRIES: u32 = 7;
 
 pub enum BackoffMessage<T> {
     Retry,
@@ -28,7 +28,7 @@ where
 {
     let start_time = Utc::now().time();
     let mut try_count = 0;
-    let max_total_duration = Duration::from_secs(120);
+    let max_total_duration = Duration::from_secs(256);
 
     match timeout(max_total_duration, async {
         while try_count <= MAX_RETRIES {

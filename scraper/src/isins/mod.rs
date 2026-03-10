@@ -21,7 +21,7 @@ pub async fn scrape_all_isins() -> WithMetrics<HashSet<ShareIsin>> {
     // I need to use crawling for this...
     // TODO: use crawling to check pages
     for letter in b'A'..=b'Z' {
-        for page in 1..=5 {
+        for page in 1..=9 {
             let letter = letter as char;
             tasks.push(scrape_isins_at_page(letter, page).instrument(info_span!(
                 "scraping isins",
