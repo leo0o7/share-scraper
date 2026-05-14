@@ -14,12 +14,10 @@ use crate::{
 
 pub mod types;
 
-const ISIN_PAGES_PER_LETTER: u8 = 9;
-
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
     scrape_all_isins_with_fetcher(
         b'A'..=b'Z',
-        ISIN_PAGES_PER_LETTER,
+        runtime.isin_max_pages_per_letter(),
         |letter, page| async move { fetch_isins_page(runtime, letter as char, page).await },
     )
     .await
@@ -71,6 +69,7 @@ where
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
     let mut previous_candidates: Option<HashSet<CompanyCandidate>> = None;
+    let mut repeated_page_found = false;
 
     for page in 1..=max_pages {
         debug!("Scraping ISINs at {} for letter {}", page, letter);
@@ -82,6 +81,7 @@ where
 
                 if previous_candidates.as_ref() == Some(&current_candidates) {
                     debug!("Found repeated ISIN page {} for letter {}", page, letter);
+                    repeated_page_found = true;
                     break;
                 }
 
@@ -93,6 +93,14 @@ where
             }
             Err(e) => metrics.errors.update(e),
         }
+    }
+
+    if !repeated_page_found {
+        warn!(
+            letter = %letter,
+            max_pages,
+            "ISIN letter page cap reached before repeated page was detected; returning partial results"
+        );
     }
 
     debug!("Found {} ISINs", res.len());
@@ -339,7 +347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scrape_all_crawls_letters_concurrently_and_excludes_repeated_sentinel_metrics() {
+    async fn scrape_all_crawls_letters_concurrently_and_stops_before_repeated_or_capped_pages() {
         fn page_html(letter: u8) -> String {
             let index = letter - b'A' + 1;
             let isin = format!("IT{index:010}");
@@ -417,5 +425,18 @@ mod tests {
         assert_eq!(scraped.metrics.total, 27);
         assert_eq!(scraped.metrics.successful, 26);
         assert_eq!(scraped.metrics.errors.parsing_error, 1);
+
+        let mut capped =
+            scrape_all_isins_with_fetcher(b'A'..=b'A', 1, move |letter, page| async move {
+                assert_eq!(page, 1);
+                Ok::<_, ScrapingError>(page_html(letter))
+            })
+            .await;
+        let capped_isins = capped.unmetric();
+
+        assert_eq!(capped_isins.len(), 1);
+        assert_eq!(capped.metrics.total, 2);
+        assert_eq!(capped.metrics.successful, 1);
+        assert_eq!(capped.metrics.errors.parsing_error, 1);
     }
 }
