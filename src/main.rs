@@ -65,13 +65,16 @@ async fn run_operation(operation: ScraperOperation, config: &AppConfig) {
 
     match operation {
         ScraperOperation::ScrapeAndInsertShares => {
-            dbg!(run_scrape_and_insert(config).await);
+            let result = run_scrape_and_insert(config).await;
+            info!(?result, "Finished scraper operation");
         }
         ScraperOperation::ScrapeAndInsertIsins => {
-            dbg!(run_scrape_and_insert_isins(config).await);
+            let result = run_scrape_and_insert_isins(config).await;
+            info!(?result, "Finished scraper operation");
         }
         ScraperOperation::RefreshShares => {
-            dbg!(run_share_refresh(config).await);
+            let result = run_share_refresh(config).await;
+            info!(?result, "Finished scraper operation");
         }
     }
 }

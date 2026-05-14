@@ -26,13 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting server...");
 
-    let db = match db::connect(&config.database).await {
-        Ok(pool) => pool,
-        Err(e) => {
-            error!("Error connecting to db: {}", e);
-            panic!()
-        }
-    };
+    let db = db::connect(&config.database).await?;
 
     let shared_state = Arc::new(AppState { db });
 

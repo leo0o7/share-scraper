@@ -652,6 +652,23 @@ mod tests {
         });
     }
 
+    #[test]
+    fn committed_config_is_safe_and_uses_explicit_duration_units() {
+        let config = include_str!("../../config.toml");
+
+        assert!(!config.contains("url ="));
+        assert!(config.contains("acquire_timeout_seconds"));
+        assert!(config.contains("share_refresh_age_minutes"));
+        assert!(config.contains("share_timeout_seconds"));
+        assert!(config.contains("http_request_timeout_seconds"));
+        assert!(config.contains("http_connect_timeout_seconds"));
+        assert!(config.contains("http_idle_timeout_seconds"));
+        assert!(config.contains("http_keepalive_seconds"));
+        assert!(config.contains("retry_total_timeout_seconds"));
+        assert!(config.contains("retry_base_delay_milliseconds"));
+        assert!(config.contains("retry_jitter_max_milliseconds"));
+    }
+
     fn write_config(root: &std::path::Path, bind_address: &str, level: &str, stdout: bool) {
         write_config_with_database_url(
             root,
