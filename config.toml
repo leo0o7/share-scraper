@@ -1,0 +1,37 @@
+# Safe defaults for local development. Keep secrets such as DATABASE_URL in .env or the environment.
+
+[server]
+# One socket address avoids separate host/port combinations that can disagree.
+bind_address = "127.0.0.1:3000"
+
+[logging]
+# RUST_LOG overrides this value when set.
+level = "info"
+# Preserve current behavior by logging to both stdout and a file.
+stdout = true
+server_file_path = "../server.log"
+scraper_file_path = "share_scraper.log"
+
+[database]
+# Keep the URL in .env as DATABASE_URL or set SHARE_SERVICE__DATABASE__URL.
+pool_max_connections = 5
+acquire_timeout_seconds = 10
+
+[scraper]
+# Preserve the current refresh behavior: only refresh shares older than 15 minutes.
+share_refresh_age_minutes = 15
+# Preserve previous share scraping pressure and per-share timeout behavior.
+share_concurrency = 200
+share_timeout_seconds = 300
+# Omit parse_threads to keep the dynamic CPU-count default; set it to pin parser workers.
+# Preserve the previous static reqwest client behavior.
+http_pool_max_idle_per_host = 200
+http_request_timeout_seconds = 30
+http_connect_timeout_seconds = 10
+http_idle_timeout_seconds = 15
+http_keepalive_seconds = 30
+# Preserve the existing exponential backoff behavior.
+retry_count = 8
+retry_total_timeout_seconds = 128
+retry_base_delay_milliseconds = 500
+retry_jitter_max_milliseconds = 1000

@@ -3,30 +3,17 @@ pub mod metrics;
 pub mod shares;
 pub mod utils;
 
-use dotenv::dotenv;
+use app_config::DatabaseConfig;
 use sqlx::{postgres::PgPoolOptions, Error, Pool, Postgres};
-use std::{env, time::Duration};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-pub async fn connect() -> Result<Pool<Postgres>, Error> {
+pub async fn connect(config: &DatabaseConfig) -> Result<Pool<Postgres>, Error> {
     info!("Attempting to connecting to database");
-    match dotenv() {
-        Ok(_) => info!("Environment variables loaded successfully"),
-        Err(e) => warn!("Failed to load .env file: {}", e),
-    }
-
-    let db_url = env::var("DATABASE_URL").map_err(|_| {
-        error!("DATABASE_URL environment variable is not set");
-        Error::from(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "DATABASE_URL environment variable is required",
-        ))
-    })?;
 
     PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(Duration::from_secs(10))
-        .connect(&db_url)
+        .max_connections(config.pool_max_connections)
+        .acquire_timeout(config.acquire_timeout)
+        .connect(&config.url)
         .await
         .inspect_err(|e| error!("Database connection failed: {}", e))
 }
