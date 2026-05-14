@@ -1,5 +1,5 @@
-use app_config::DatabaseConfig;
-use chrono::{Duration, NaiveTime, Utc};
+use app_config::{AppConfig, DatabaseConfig, ScraperConfig};
+use chrono::{NaiveTime, Utc};
 use db::{
     isins::{insert_all_isins, query_all_isins},
     metrics::InsertionMetrics,
@@ -40,22 +40,30 @@ where
     }
 }
 
-pub async fn run_scrape_and_insert(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
-    run_timed(|| scrape_and_insert_all_shares(database_config)).await
+pub async fn run_scrape_and_insert(config: &AppConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| scrape_and_insert_all_shares(&config.database)).await
 }
 
-pub async fn run_share_refresh(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
-    run_timed(|| async move { refresh_shares(database_config, Duration::minutes(15)).await }).await
+pub async fn run_share_refresh(config: &AppConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| async move {
+        refresh_shares(&config.database, chrono_share_refresh_age(&config.scraper)).await
+    })
+    .await
 }
 
-pub async fn run_scrape_and_insert_isins(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
-    run_timed(|| scrape_and_insert_all_isins(database_config)).await
+pub async fn run_scrape_and_insert_isins(config: &AppConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| scrape_and_insert_all_isins(&config.database)).await
+}
+
+fn chrono_share_refresh_age(config: &ScraperConfig) -> chrono::Duration {
+    chrono::Duration::from_std(config.share_refresh_age)
+        .expect("validated scraper refresh age should fit chrono duration")
 }
 
 #[instrument]
 pub async fn refresh_shares(
     database_config: &DatabaseConfig,
-    before: Duration,
+    before: chrono::Duration,
 ) -> ScrapeAndInsertMetrics {
     info!("Refreshing all shares not updated in {:?}", before);
 

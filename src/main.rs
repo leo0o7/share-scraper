@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Mutex;
 
-use app_config::{load_config, DatabaseConfig, LoggingConfig};
+use app_config::{load_config, AppConfig, LoggingConfig};
 use scraper_utils::{run_scrape_and_insert, run_scrape_and_insert_isins, run_share_refresh};
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging(&config.logging)?;
 
     let operation = parse_operation(std::env::args().skip(1))?;
-    run_operation(operation, &config.database).await;
+    run_operation(operation, &config).await;
 
     Ok(())
 }
@@ -60,18 +60,18 @@ fn init_logging(config: &LoggingConfig) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-async fn run_operation(operation: ScraperOperation, database_config: &DatabaseConfig) {
+async fn run_operation(operation: ScraperOperation, config: &AppConfig) {
     info!(?operation, "Starting scraper operation");
 
     match operation {
         ScraperOperation::ScrapeAndInsertShares => {
-            dbg!(run_scrape_and_insert(database_config).await);
+            dbg!(run_scrape_and_insert(config).await);
         }
         ScraperOperation::ScrapeAndInsertIsins => {
-            dbg!(run_scrape_and_insert_isins(database_config).await);
+            dbg!(run_scrape_and_insert_isins(config).await);
         }
         ScraperOperation::RefreshShares => {
-            dbg!(run_share_refresh(database_config).await);
+            dbg!(run_share_refresh(config).await);
         }
     }
 }

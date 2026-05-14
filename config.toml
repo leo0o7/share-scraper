@@ -16,3 +16,7 @@ scraper_file_path = "share_scraper.log"
 # Keep the URL in .env as DATABASE_URL or set SHARE_SERVICE__DATABASE__URL.
 pool_max_connections = 5
 acquire_timeout_seconds = 10
+
+[scraper]
+# Preserve the current refresh behavior: only refresh shares older than 15 minutes.
+share_refresh_age_minutes = 15

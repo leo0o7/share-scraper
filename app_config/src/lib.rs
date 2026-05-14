@@ -22,6 +22,7 @@ pub enum ConfigError {
     MissingDatabaseUrl,
     InvalidDatabasePoolMaxConnections,
     InvalidDatabaseAcquireTimeoutSeconds,
+    InvalidScraperShareRefreshAgeMinutes,
 }
 
 impl Display for ConfigError {
@@ -53,6 +54,10 @@ impl Display for ConfigError {
                 f,
                 "database.acquire_timeout_seconds must be greater than zero"
             ),
+            ConfigError::InvalidScraperShareRefreshAgeMinutes => write!(
+                f,
+                "scraper.share_refresh_age_minutes must be greater than zero"
+            ),
         }
     }
 }
@@ -64,6 +69,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub logging: LoggingConfig,
     pub database: DatabaseConfig,
+    pub scraper: ScraperConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -86,11 +92,17 @@ pub struct DatabaseConfig {
     pub acquire_timeout: Duration,
 }
 
+#[derive(Debug, Clone)]
+pub struct ScraperConfig {
+    pub share_refresh_age: Duration,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawAppConfig {
     server: RawServerConfig,
     logging: RawLoggingConfig,
     database: RawDatabaseConfig,
+    scraper: RawScraperConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +123,11 @@ struct RawDatabaseConfig {
     url: Option<String>,
     pool_max_connections: u32,
     acquire_timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawScraperConfig {
+    share_refresh_age_minutes: u64,
 }
 
 pub fn load_config(manifest_dir: impl AsRef<Path>) -> ConfigResult<AppConfig> {
@@ -190,6 +207,14 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
     if raw.database.acquire_timeout_seconds == 0 {
         return Err(ConfigError::InvalidDatabaseAcquireTimeoutSeconds);
     }
+    let share_refresh_age_seconds = raw
+        .scraper
+        .share_refresh_age_minutes
+        .checked_mul(60)
+        .ok_or(ConfigError::InvalidScraperShareRefreshAgeMinutes)?;
+    if share_refresh_age_seconds == 0 || share_refresh_age_seconds > i64::MAX as u64 {
+        return Err(ConfigError::InvalidScraperShareRefreshAgeMinutes);
+    }
 
     Ok(AppConfig {
         server: ServerConfig { bind_address },
@@ -203,6 +228,9 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
             url: database_url,
             pool_max_connections: raw.database.pool_max_connections,
             acquire_timeout: Duration::from_secs(raw.database.acquire_timeout_seconds),
+        },
+        scraper: ScraperConfig {
+            share_refresh_age: Duration::from_secs(share_refresh_age_seconds),
         },
     })
 }
@@ -330,6 +358,47 @@ mod tests {
 
     #[test]
     #[serial]
+    fn loads_configured_share_refresh_age() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
+                Some("30"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let config = load_config(root.path()).unwrap();
+
+                    assert_eq!(config.scraper.share_refresh_age.as_secs(), 30 * 60);
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_zero_share_refresh_age() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(
+                        err,
+                        ConfigError::InvalidScraperShareRefreshAgeMinutes
+                    ));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
     fn rejects_missing_database_url() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var("DATABASE_URL", None::<&str>, || {
@@ -379,6 +448,9 @@ scraper_file_path = "share_scraper.log"
 url = "{database_url}"
 pool_max_connections = 5
 acquire_timeout_seconds = 10
+
+[scraper]
+share_refresh_age_minutes = 15
 "#
             ),
         )
@@ -407,6 +479,9 @@ scraper_file_path = "share_scraper.log"
 [database]
 pool_max_connections = 5
 acquire_timeout_seconds = 10
+
+[scraper]
+share_refresh_age_minutes = 15
 "#
             ),
         )
