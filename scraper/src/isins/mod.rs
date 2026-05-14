@@ -14,7 +14,9 @@ use crate::{
 mod company_candidate;
 pub mod types;
 
-use company_candidate::{extract_company_elements, parse_elements, CompanyCandidate};
+use company_candidate::{
+    company_page_signature, extract_company_elements, parse_elements, CompanyPageSignature,
+};
 
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
     scrape_all_isins_with_fetcher(
@@ -70,7 +72,7 @@ where
 {
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
-    let mut previous_candidates: Option<HashSet<CompanyCandidate>> = None;
+    let mut previous_signature: Option<CompanyPageSignature> = None;
     let mut repeated_page_found = false;
 
     for page in 1..=max_pages {
@@ -80,18 +82,15 @@ where
             Ok(txt) => {
                 let doc = Html::parse_document(&txt);
                 let isin_elements = extract_company_elements(&doc);
-                let current_candidates = isin_elements
-                    .iter()
-                    .map(|element| CompanyCandidate::from(*element))
-                    .collect::<HashSet<_>>();
+                let current_signature = company_page_signature(&isin_elements);
 
-                if previous_candidates.as_ref() == Some(&current_candidates) {
+                if previous_signature.as_ref() == Some(&current_signature) {
                     debug!("Found repeated ISIN page {} for letter {}", page, letter);
                     repeated_page_found = true;
                     break;
                 }
 
-                previous_candidates = Some(current_candidates);
+                previous_signature = Some(current_signature);
 
                 let mut isins = parse_elements(isin_elements);
                 res.extend(isins.unmetric());
@@ -342,5 +341,47 @@ mod tests {
         assert_eq!(capped.metrics.total, 2);
         assert_eq!(capped.metrics.successful, 1);
         assert_eq!(capped.metrics.errors.parsing_error, 1);
+    }
+
+    #[tokio::test]
+    async fn repeated_page_detection_uses_stable_isin_signature() {
+        fn page_html(name: &str) -> String {
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0003128367-MTAA.html?lang=it">
+                                    <span class="t-text">{name}</span>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
+        }
+
+        let mut scraped =
+            scrape_all_isins_with_fetcher(b'S'..=b'S', 2, move |_letter, page| async move {
+                let name = if page == 1 {
+                    "Stable Name"
+                } else {
+                    "Changed Name"
+                };
+
+                Ok::<_, ScrapingError>(page_html(name))
+            })
+            .await;
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 1);
+        assert_eq!(scraped.metrics.total, 1);
+        assert_eq!(scraped.metrics.successful, 1);
+
+        let share = isins.iter().next().expect("expected parsed share isin");
+        assert_eq!(share.share_name, "Stable Name");
+        assert_eq!(share.isin.to_string(), "IT0003128367");
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use html_scraper::{ElementRef, Html, Selector};
 use once_cell::sync::Lazy;
@@ -10,6 +10,8 @@ use crate::{
 };
 
 use super::types::{isin_token_from_href, ShareIsin};
+
+pub(super) type CompanyPageSignature = BTreeSet<String>;
 
 static DESKTOP_COMPANY_SELECTOR: Lazy<Selector> = Lazy::new(|| {
     Selector::parse("div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a.u-hidden.-xs")
@@ -58,6 +60,15 @@ pub(super) fn extract_company_elements<'a>(doc: &'a Html) -> Vec<ElementRef<'a>>
     }
 
     isin_elements
+}
+
+pub(super) fn company_page_signature(isin_elements: &[ElementRef<'_>]) -> CompanyPageSignature {
+    isin_elements
+        .iter()
+        .filter_map(|element| element.attr("href"))
+        .filter_map(isin_token_from_href)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn parse_company_name(element: ElementRef<'_>) -> Option<String> {
