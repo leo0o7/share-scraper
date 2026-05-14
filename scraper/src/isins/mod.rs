@@ -72,7 +72,7 @@ where
 {
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
-    let mut previous_signature: Option<CompanyPageSignature> = None;
+    let mut seen_signatures: HashSet<CompanyPageSignature> = HashSet::new();
     let mut repeated_page_found = false;
 
     for page in 1..=max_pages {
@@ -84,13 +84,11 @@ where
                 let isin_elements = extract_company_elements(&doc);
                 let current_signature = company_page_signature(&isin_elements);
 
-                if previous_signature.as_ref() == Some(&current_signature) {
+                if !seen_signatures.insert(current_signature) {
                     debug!("Found repeated ISIN page {} for letter {}", page, letter);
                     repeated_page_found = true;
                     break;
                 }
-
-                previous_signature = Some(current_signature);
 
                 let mut isins = parse_elements(isin_elements);
                 res.extend(isins.unmetric());
@@ -383,5 +381,43 @@ mod tests {
         let share = isins.iter().next().expect("expected parsed share isin");
         assert_eq!(share.share_name, "Stable Name");
         assert_eq!(share.isin.to_string(), "IT0003128367");
+    }
+
+    #[tokio::test]
+    async fn repeated_page_detection_stops_on_non_adjacent_repeats() {
+        fn page_html(isin: &str) -> String {
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/{isin}-MTAA.html?lang=it">
+                                    <span class="t-text">{isin}</span>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
+        }
+
+        let mut scraped =
+            scrape_all_isins_with_fetcher(b'C'..=b'C', 3, move |_letter, page| async move {
+                let isin = match page {
+                    1 | 3 => "IT0003128367",
+                    2 => "IT0000072618",
+                    _ => unreachable!(),
+                };
+
+                Ok::<_, ScrapingError>(page_html(isin))
+            })
+            .await;
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 2);
+        assert_eq!(scraped.metrics.total, 2);
+        assert_eq!(scraped.metrics.successful, 2);
     }
 }
