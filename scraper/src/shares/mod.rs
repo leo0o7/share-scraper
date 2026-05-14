@@ -6,8 +6,8 @@ pub use models::{share::Share, ScrapableStruct};
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use scraper::Html;
-use std::time::Duration;
-use tokio::{task, time::timeout};
+use std::{sync::Arc, time::Duration};
+use tokio::{sync::Semaphore, task, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 
 use crate::{
@@ -30,26 +30,29 @@ pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> WithMetrics<Vec<S
     let total_shares = share_isins.len();
     metrics.total = total_shares as i32;
 
+    let mut res: Vec<Share> = Vec::new();
+    let permits = Arc::new(Semaphore::new(200));
     let tasks: Vec<_> = share_isins
         .into_iter()
         .enumerate()
         .map(|(i, share_isin)| {
-            let isin_str = &share_isin.isin.to_string();
-            task::spawn(
-                scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
-                    "scraping_share",
-                    isin = isin_str,
-                    curr = i,
-                    total = total_shares,
-                )),
-            )
+            let permits = Arc::clone(&permits);
+            tokio::spawn(async move {
+                let isin_str = &share_isin.isin.to_string();
+                let _permit = permits.acquire().await.unwrap();
+                scrape_share_with_max_duration(share_isin, 5 * 60)
+                    .instrument(info_span!(
+                        "scraping_share",
+                        isin = isin_str,
+                        curr = i,
+                        total = total_shares,
+                    ))
+                    .await
+            })
         })
         .collect();
 
-    let results = join_all(tasks).await;
-
-    let mut res: Vec<Share> = Vec::new();
-    for result in results {
+    for result in join_all(tasks).await {
         match result {
             Ok(Ok(result)) => {
                 metrics.successful += 1;
@@ -59,30 +62,6 @@ pub async fn scrape_all_shares(share_isins: Vec<ShareIsin>) -> WithMetrics<Vec<S
             Err(e) => error!("task failed {e}"),
         }
     }
-
-    // let mut tasks = FuturesUnordered::new();
-    //
-    // for (i, share_isin) in share_isins.into_iter().enumerate() {
-    //     let isin_str = &share_isin.isin.to_string();
-    //     tasks.push(
-    //         scrape_share_with_max_duration(share_isin, 5 * 60).instrument(info_span!(
-    //             "scraping_share",
-    //             isin = isin_str,
-    //             curr = i,
-    //             total = total_shares,
-    //         )),
-    //     );
-    // }
-    //
-    // while let Some(result) = tasks.next().await {
-    //     match result {
-    //         Ok(result) => {
-    //             metrics.successful += 1;
-    //             res.push(result);
-    //         }
-    //         Err(e) => metrics.errors.update(e),
-    //     };
-    // }
     info!("Scraped a total of {} shares.", res.len());
 
     WithMetrics::new(res, metrics)

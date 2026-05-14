@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 // use scraper_utils::run_scrape_and_insert_isins;
-use scraper_utils::run_share_refresh;
+use scraper_utils::{run_scrape_and_insert, run_share_refresh, scrape_and_insert_all_isins};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
@@ -19,5 +19,7 @@ async fn main() {
         .with(stdout_logger)
         .init();
 
-    dbg!(run_share_refresh().await);
+    // dbg!(scrape_and_insert_all_isins().await);
+    // dbg!(run_share_refresh().await);
+    dbg!(run_scrape_and_insert().await);
 }
