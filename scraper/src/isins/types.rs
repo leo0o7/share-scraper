@@ -3,11 +3,15 @@ use std::hash::Hash;
 
 use crate::shares::parsers::SafeParse;
 use chrono::NaiveDateTime;
-use html_scraper::ElementRef;
+use html_scraper::{ElementRef, Selector};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::errors::{ScraperResult, ScrapingError};
+
+static ISIN_SHARE_NAME_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse("span.t-text").unwrap());
 
 // derive for HashSet and other
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -94,9 +98,6 @@ impl ShareIsin {
     pub fn from_element(isin_element: ElementRef) -> ScraperResult<Self> {
         debug!("Attempting to create ShareIsin from element");
 
-        let isin_share_name_selector =
-            html_scraper::Selector::parse("span.t-text").map_err(|_| ScrapingError::ParsingErr)?;
-
         let share_link_attr = isin_element
             .attr("href")
             .ok_or(ScrapingError::InvalidPage)?;
@@ -105,7 +106,7 @@ impl ShareIsin {
         debug!("ISIN string is {}", isin_str);
 
         let name: String = isin_element
-            .select(&isin_share_name_selector)
+            .select(&ISIN_SHARE_NAME_SELECTOR)
             .next()
             .and_then(|el| el.safe_parse())
             .ok_or(ScrapingError::InvalidPage)?;
@@ -115,6 +116,8 @@ impl ShareIsin {
     }
 }
 
+// Borsa detail links put the ISIN in the last path segment and may append
+// market suffixes or query params, for example `IT0005439861-EXGM.html?lang=it`.
 pub(crate) fn isin_token_from_href(href: &str) -> Option<&str> {
     href.split('/')
         .next_back()

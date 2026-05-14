@@ -1,18 +1,30 @@
 use std::{collections::HashSet, future::Future};
 
 use futures::{stream::FuturesUnordered, StreamExt};
-use html_scraper::{ElementRef, Html};
+use html_scraper::{ElementRef, Html, Selector};
+use once_cell::sync::Lazy;
 use tracing::{debug, info_span, warn, Instrument};
 use types::{isin_token_from_href, ShareIsin};
 
 use crate::{
-    errors::{ScraperResult, ScrapingError},
+    errors::ScraperResult,
     metrics::{ScrapingMetrics, WithMetrics},
     shares::parsers::SafeParse,
     ScraperRuntime,
 };
 
 pub mod types;
+
+static DESKTOP_COMPANY_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse("div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a.u-hidden.-xs")
+        .unwrap()
+});
+static COMPANY_LINK_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse("div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a[href]")
+        .unwrap()
+});
+static COMPANY_NAME_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse("span.t-text").unwrap());
 
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
     scrape_all_isins_with_fetcher(
@@ -76,8 +88,12 @@ where
 
         match fetch_page(page).await {
             Ok(txt) => {
-                let candidates = extract_company_candidates(&txt);
-                let current_candidates = candidates.iter().cloned().collect::<HashSet<_>>();
+                let doc = Html::parse_document(&txt);
+                let isin_elements = extract_company_elements(&doc);
+                let current_candidates = isin_elements
+                    .iter()
+                    .map(|element| CompanyCandidate::from(*element))
+                    .collect::<HashSet<_>>();
 
                 if previous_candidates.as_ref() == Some(&current_candidates) {
                     debug!("Found repeated ISIN page {} for letter {}", page, letter);
@@ -87,7 +103,7 @@ where
 
                 previous_candidates = Some(current_candidates);
 
-                let mut isins = parse_candidates(candidates);
+                let mut isins = parse_elements(isin_elements);
                 res.extend(isins.unmetric());
                 metrics = metrics + isins.metrics;
             }
@@ -128,7 +144,8 @@ async fn fetch_isins_page(
 fn parse_page(res_txt: String) -> WithMetrics<HashSet<ShareIsin>> {
     debug!("Parsing ISIN page");
 
-    parse_candidates(extract_company_candidates(&res_txt))
+    let doc = Html::parse_document(&res_txt);
+    parse_elements(extract_company_elements(&doc))
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -137,26 +154,25 @@ struct CompanyCandidate {
     name: Option<String>,
 }
 
-fn extract_company_candidates(res_txt: &str) -> Vec<CompanyCandidate> {
-    let doc = Html::parse_document(res_txt);
-    let desktop_company_selector = html_scraper::Selector::parse(
-        "div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a.u-hidden.-xs",
-    )
-    .unwrap();
-    let company_link_selector = html_scraper::Selector::parse(
-        "div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a[href]",
-    )
-    .unwrap();
+impl From<ElementRef<'_>> for CompanyCandidate {
+    fn from(element: ElementRef<'_>) -> Self {
+        CompanyCandidate {
+            href: element.attr("href").unwrap_or_default().to_string(),
+            name: parse_company_name(element),
+        }
+    }
+}
 
+fn extract_company_elements<'a>(doc: &'a Html) -> Vec<ElementRef<'a>> {
     let mut isin_elements: Vec<_> = doc
-        .select(&desktop_company_selector)
+        .select(&DESKTOP_COMPANY_SELECTOR)
         .filter(is_company_detail_element)
         .collect();
 
     if isin_elements.is_empty() {
         let mut seen_hrefs = HashSet::new();
         isin_elements = doc
-            .select(&company_link_selector)
+            .select(&COMPANY_LINK_SELECTOR)
             .filter(is_company_detail_element)
             .filter(|element| {
                 element
@@ -168,36 +184,28 @@ fn extract_company_candidates(res_txt: &str) -> Vec<CompanyCandidate> {
     }
 
     isin_elements
-        .into_iter()
-        .map(company_candidate_from_element)
-        .collect()
 }
 
-fn company_candidate_from_element(element: ElementRef<'_>) -> CompanyCandidate {
-    let name_selector = html_scraper::Selector::parse("span.t-text").unwrap();
-    let name = element
-        .select(&name_selector)
+fn parse_company_name(element: ElementRef<'_>) -> Option<String> {
+    element
+        .select(&COMPANY_NAME_SELECTOR)
         .next()
-        .and_then(|el| el.safe_parse());
-
-    CompanyCandidate {
-        href: element.attr("href").unwrap_or_default().to_string(),
-        name,
-    }
+        .and_then(|el| el.safe_parse())
 }
 
-fn parse_candidates(candidates: Vec<CompanyCandidate>) -> WithMetrics<HashSet<ShareIsin>> {
+fn parse_elements(isin_elements: Vec<ElementRef<'_>>) -> WithMetrics<HashSet<ShareIsin>> {
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
 
-    candidates.into_iter().for_each(|candidate| {
+    isin_elements.into_iter().for_each(|element| {
         metrics.total += 1;
-        match share_isin_from_candidate(&candidate) {
+        match ShareIsin::from_element(element) {
             Ok(share_isin) => {
                 metrics.successful += 1;
                 res.insert(share_isin);
             }
             Err(error) => {
+                let candidate = CompanyCandidate::from(element);
                 let token = isin_token_from_href(&candidate.href).unwrap_or("<missing>");
                 let company_name = candidate.name.as_deref().unwrap_or("<missing>");
 
@@ -217,20 +225,13 @@ fn parse_candidates(candidates: Vec<CompanyCandidate>) -> WithMetrics<HashSet<Sh
     WithMetrics::new(res, metrics)
 }
 
-fn share_isin_from_candidate(candidate: &CompanyCandidate) -> ScraperResult<ShareIsin> {
-    let isin_str = isin_token_from_href(&candidate.href).ok_or(ScrapingError::ParsingErr)?;
-    let name = candidate.name.clone().ok_or(ScrapingError::InvalidPage)?;
-
-    ShareIsin::new(name, isin_str.to_owned()).ok_or(ScrapingError::ParsingErr)
-}
-
 fn is_company_detail_element(element: &ElementRef<'_>) -> bool {
     element.attr("href").is_some_and(is_company_detail_href)
 }
 
 fn is_company_detail_href(href: &str) -> bool {
-    href.starts_with("/borsa/azioni/scheda/")
-        && href.ends_with(".html")
+    href.starts_with("/borsa/azioni/")
+        && href.contains("/scheda/")
         && isin_token_from_href(href).is_some()
 }
 
@@ -250,7 +251,7 @@ mod tests {
                 <table class="m-table -firstlevel">
                     <tr>
                         <td>
-                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0005439861-EXGM.html">
+                            <a class="u-hidden -xs" href="/borsa/azioni/euronext-growth-milan/scheda/IT0005439861-EXGM.html?lang=it">
                                 <span class="t-text">Example Share</span>
                             </a>
                         </td>
