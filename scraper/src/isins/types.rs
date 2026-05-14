@@ -101,11 +101,7 @@ impl ShareIsin {
             .attr("href")
             .ok_or(ScrapingError::InvalidPage)?;
 
-        let isin_str = share_link_attr
-            .split("/")
-            .last()
-            .and_then(|s| s.split(".").next())
-            .ok_or(ScrapingError::ParsingErr)?;
+        let isin_str = isin_token_from_href(share_link_attr).ok_or(ScrapingError::ParsingErr)?;
         debug!("ISIN string is {}", isin_str);
 
         let name: String = isin_element
@@ -117,4 +113,11 @@ impl ShareIsin {
 
         Self::new(name, isin_str.to_owned()).ok_or(ScrapingError::ParsingErr)
     }
+}
+
+pub(crate) fn isin_token_from_href(href: &str) -> Option<&str> {
+    href.split('/')
+        .next_back()
+        .and_then(|s| s.split('.').next())
+        .and_then(|s| s.split('-').next())
 }

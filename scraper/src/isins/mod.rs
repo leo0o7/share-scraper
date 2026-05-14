@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use futures::{stream::FuturesUnordered, StreamExt};
 use html_scraper::Html;
 use tracing::{debug, info_span, warn, Instrument};
-use types::ShareIsin;
+use types::{isin_token_from_href, ShareIsin};
 
 use crate::{
     metrics::{ScrapingMetrics, WithMetrics},
@@ -98,13 +98,57 @@ fn parse_page(res_txt: String) -> WithMetrics<HashSet<ShareIsin>> {
                 metrics.successful += 1;
                 res.insert(result);
             }
-            Err(e) => {
-                warn!("ISIN creation failed: {:?}", e);
-                metrics.errors.update(e)
+            Err(error) => {
+                let href = e.attr("href").unwrap_or("<missing>");
+                let token = isin_token_from_href(href).unwrap_or("<missing>");
+                let company_name = e.text().collect::<Vec<_>>().join(" ");
+                let company_name = company_name.trim();
+
+                warn!(
+                    href = %href,
+                    token = %token,
+                    company_name = %company_name,
+                    error = ?error,
+                    "ISIN creation failed"
+                );
+                metrics.errors.update(error)
             }
         }
     });
     debug!("Metrics for parsing: {:?}", metrics);
 
     WithMetrics::new(res, metrics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_page;
+
+    #[test]
+    fn parses_company_href_with_market_suffix_as_website_isin_token() {
+        let html = r#"
+            <div data-bb-view="list-aZ-stream">
+                <table class="m-table -firstlevel">
+                    <tr>
+                        <td>
+                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0005439861-EXGM.html">
+                                <span class="t-text">Example Share</span>
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        "#;
+
+        let mut parsed = parse_page(html.to_string());
+        let isins = parsed.unmetric();
+
+        assert_eq!(parsed.metrics.total, 1);
+        assert_eq!(parsed.metrics.successful, 1);
+        assert_eq!(parsed.metrics.errors.parsing_error, 0);
+
+        let share = isins.iter().next().expect("expected parsed share isin");
+        assert_eq!(share.share_name, "Example Share");
+        assert_eq!(share.isin.to_string(), "IT0005439861");
+    }
 }
