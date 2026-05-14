@@ -20,3 +20,9 @@ acquire_timeout_seconds = 10
 [scraper]
 # Preserve the current refresh behavior: only refresh shares older than 15 minutes.
 share_refresh_age_minutes = 15
+# Preserve the previous static reqwest client behavior.
+http_pool_max_idle_per_host = 200
+http_request_timeout_seconds = 30
+http_connect_timeout_seconds = 10
+http_idle_timeout_seconds = 15
+http_keepalive_seconds = 30

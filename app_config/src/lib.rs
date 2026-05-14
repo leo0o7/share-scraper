@@ -23,6 +23,7 @@ pub enum ConfigError {
     InvalidDatabasePoolMaxConnections,
     InvalidDatabaseAcquireTimeoutSeconds,
     InvalidScraperShareRefreshAgeMinutes,
+    InvalidScraperHttpTimeout(&'static str),
 }
 
 impl Display for ConfigError {
@@ -58,6 +59,9 @@ impl Display for ConfigError {
                 f,
                 "scraper.share_refresh_age_minutes must be greater than zero"
             ),
+            ConfigError::InvalidScraperHttpTimeout(field) => {
+                write!(f, "scraper.{field} must be greater than zero")
+            }
         }
     }
 }
@@ -95,6 +99,11 @@ pub struct DatabaseConfig {
 #[derive(Debug, Clone)]
 pub struct ScraperConfig {
     pub share_refresh_age: Duration,
+    pub http_pool_max_idle_per_host: usize,
+    pub http_request_timeout: Duration,
+    pub http_connect_timeout: Duration,
+    pub http_idle_timeout: Duration,
+    pub http_keepalive: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +137,11 @@ struct RawDatabaseConfig {
 #[derive(Debug, Deserialize)]
 struct RawScraperConfig {
     share_refresh_age_minutes: u64,
+    http_pool_max_idle_per_host: usize,
+    http_request_timeout_seconds: u64,
+    http_connect_timeout_seconds: u64,
+    http_idle_timeout_seconds: u64,
+    http_keepalive_seconds: u64,
 }
 
 pub fn load_config(manifest_dir: impl AsRef<Path>) -> ConfigResult<AppConfig> {
@@ -215,6 +229,22 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
     if share_refresh_age_seconds == 0 || share_refresh_age_seconds > i64::MAX as u64 {
         return Err(ConfigError::InvalidScraperShareRefreshAgeMinutes);
     }
+    validate_nonzero_scraper_duration(
+        "http_request_timeout_seconds",
+        raw.scraper.http_request_timeout_seconds,
+    )?;
+    validate_nonzero_scraper_duration(
+        "http_connect_timeout_seconds",
+        raw.scraper.http_connect_timeout_seconds,
+    )?;
+    validate_nonzero_scraper_duration(
+        "http_idle_timeout_seconds",
+        raw.scraper.http_idle_timeout_seconds,
+    )?;
+    validate_nonzero_scraper_duration(
+        "http_keepalive_seconds",
+        raw.scraper.http_keepalive_seconds,
+    )?;
 
     Ok(AppConfig {
         server: ServerConfig { bind_address },
@@ -231,8 +261,21 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
         },
         scraper: ScraperConfig {
             share_refresh_age: Duration::from_secs(share_refresh_age_seconds),
+            http_pool_max_idle_per_host: raw.scraper.http_pool_max_idle_per_host,
+            http_request_timeout: Duration::from_secs(raw.scraper.http_request_timeout_seconds),
+            http_connect_timeout: Duration::from_secs(raw.scraper.http_connect_timeout_seconds),
+            http_idle_timeout: Duration::from_secs(raw.scraper.http_idle_timeout_seconds),
+            http_keepalive: Duration::from_secs(raw.scraper.http_keepalive_seconds),
         },
     })
+}
+
+fn validate_nonzero_scraper_duration(field: &'static str, value: u64) -> ConfigResult<()> {
+    if value == 0 {
+        return Err(ConfigError::InvalidScraperHttpTimeout(field));
+    }
+
+    Ok(())
 }
 
 fn validate_path(field: &'static str, path: String) -> ConfigResult<PathBuf> {
@@ -399,6 +442,28 @@ mod tests {
 
     #[test]
     #[serial]
+    fn rejects_zero_scraper_http_timeout() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__HTTP_REQUEST_TIMEOUT_SECONDS",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(
+                        err,
+                        ConfigError::InvalidScraperHttpTimeout("http_request_timeout_seconds")
+                    ));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
     fn rejects_missing_database_url() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var("DATABASE_URL", None::<&str>, || {
@@ -451,6 +516,11 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+http_pool_max_idle_per_host = 200
+http_request_timeout_seconds = 30
+http_connect_timeout_seconds = 10
+http_idle_timeout_seconds = 15
+http_keepalive_seconds = 30
 "#
             ),
         )
@@ -482,6 +552,11 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+http_pool_max_idle_per_host = 200
+http_request_timeout_seconds = 30
+http_connect_timeout_seconds = 10
+http_idle_timeout_seconds = 15
+http_keepalive_seconds = 30
 "#
             ),
         )

@@ -6,13 +6,13 @@ use tracing::{debug, info_span, warn, Instrument};
 use types::ShareIsin;
 
 use crate::{
-    get_page_text,
     metrics::{ScrapingMetrics, WithMetrics},
+    ScraperRuntime,
 };
 
 pub mod types;
 
-pub async fn scrape_all_isins() -> WithMetrics<HashSet<ShareIsin>> {
+pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
     let mut metrics = ScrapingMetrics::empty();
     let mut tasks = FuturesUnordered::new();
 
@@ -23,11 +23,13 @@ pub async fn scrape_all_isins() -> WithMetrics<HashSet<ShareIsin>> {
     for letter in b'A'..=b'Z' {
         for page in 1..=9 {
             let letter = letter as char;
-            tasks.push(scrape_isins_at_page(letter, page).instrument(info_span!(
-                "scraping isins",
-                letter = letter.to_string(),
-                page = page
-            )));
+            tasks.push(
+                scrape_isins_at_page(runtime, letter, page).instrument(info_span!(
+                    "scraping isins",
+                    letter = letter.to_string(),
+                    page = page
+                )),
+            );
         }
     }
 
@@ -41,7 +43,11 @@ pub async fn scrape_all_isins() -> WithMetrics<HashSet<ShareIsin>> {
     WithMetrics::new(res, metrics)
 }
 
-async fn scrape_isins_at_page(letter: char, page: u8) -> WithMetrics<HashSet<ShareIsin>> {
+async fn scrape_isins_at_page(
+    runtime: &ScraperRuntime,
+    letter: char,
+    page: u8,
+) -> WithMetrics<HashSet<ShareIsin>> {
     debug!("Scraping ISINs at {} for letter {}", page, letter);
 
     let url = format!(
@@ -52,7 +58,8 @@ async fn scrape_isins_at_page(letter: char, page: u8) -> WithMetrics<HashSet<Sha
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
 
-    let res_txt = get_page_text(url)
+    let res_txt = runtime
+        .get_page_text(url)
         .instrument(info_span!("fetching_page"))
         .await;
 
