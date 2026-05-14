@@ -1,3 +1,4 @@
+use app_config::DatabaseConfig;
 use chrono::{Duration, NaiveTime, Utc};
 use db::{
     isins::{insert_all_isins, query_all_isins},
@@ -39,23 +40,26 @@ where
     }
 }
 
-pub async fn run_scrape_and_insert() -> ScrapeAndInsertInfo {
-    run_timed(scrape_and_insert_all_shares).await
+pub async fn run_scrape_and_insert(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| scrape_and_insert_all_shares(database_config)).await
 }
 
-pub async fn run_share_refresh() -> ScrapeAndInsertInfo {
-    run_timed(|| async move { refresh_shares(Duration::minutes(15)).await }).await
+pub async fn run_share_refresh(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| async move { refresh_shares(database_config, Duration::minutes(15)).await }).await
 }
 
-pub async fn run_scrape_and_insert_isins() -> ScrapeAndInsertInfo {
-    run_timed(scrape_and_insert_all_isins).await
+pub async fn run_scrape_and_insert_isins(database_config: &DatabaseConfig) -> ScrapeAndInsertInfo {
+    run_timed(|| scrape_and_insert_all_isins(database_config)).await
 }
 
 #[instrument]
-pub async fn refresh_shares(before: Duration) -> ScrapeAndInsertMetrics {
+pub async fn refresh_shares(
+    database_config: &DatabaseConfig,
+    before: Duration,
+) -> ScrapeAndInsertMetrics {
     info!("Refreshing all shares not updated in {:?}", before);
 
-    let pool = db::connect().await.unwrap();
+    let pool = db::connect(database_config).await.unwrap();
     let share_isins = get_shares_to_refresh(&pool, before)
         .await
         .expect("Failed to query shares to scrape");
@@ -70,10 +74,12 @@ pub async fn refresh_shares(before: Duration) -> ScrapeAndInsertMetrics {
 }
 
 #[instrument]
-pub async fn scrape_and_insert_all_shares() -> ScrapeAndInsertMetrics {
+pub async fn scrape_and_insert_all_shares(
+    database_config: &DatabaseConfig,
+) -> ScrapeAndInsertMetrics {
     info!("Started scraping and inserting all shares");
 
-    let pool = db::connect().await.unwrap();
+    let pool = db::connect(database_config).await.unwrap();
     let share_isins = query_all_isins(&pool)
         .await
         .expect("Failed to query all ISINs");
@@ -88,11 +94,13 @@ pub async fn scrape_and_insert_all_shares() -> ScrapeAndInsertMetrics {
 }
 
 #[instrument]
-pub async fn scrape_and_insert_all_isins() -> ScrapeAndInsertMetrics {
+pub async fn scrape_and_insert_all_isins(
+    database_config: &DatabaseConfig,
+) -> ScrapeAndInsertMetrics {
     info!("Started scraping and inserting all isins");
 
     let mut isins = scrape_all_isins().await;
-    let pool = db::connect().await.unwrap();
+    let pool = db::connect(database_config).await.unwrap();
     let insertion_metrics = insert_all_isins(isins.unmetric().into_iter().collect(), &pool)
         .instrument(info_span!("insert_all_isins"))
         .await;

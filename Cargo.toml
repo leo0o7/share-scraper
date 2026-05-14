@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+app_config = { path = "app_config" }
 db = { path = "db" }
 scraper_utils = { path = "scraper_utils" }
 tokio = { version = "1.42.0", features = ["full"] }

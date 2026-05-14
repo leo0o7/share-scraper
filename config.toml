@@ -11,3 +11,8 @@ level = "info"
 stdout = true
 server_file_path = "../server.log"
 scraper_file_path = "share_scraper.log"
+
+[database]
+# Keep the URL in .env as DATABASE_URL or set SHARE_SERVICE__DATABASE__URL.
+pool_max_connections = 5
+acquire_timeout_seconds = 10

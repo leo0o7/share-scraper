@@ -1,10 +1,12 @@
 use std::sync::Mutex;
 
+use app_config::load_config;
 use scraper_utils::run_scrape_and_insert;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(env!("CARGO_MANIFEST_DIR"))?;
     let log_file = std::fs::File::create("share_scraper.log").expect("Can't create log file");
 
     let file_logger = fmt::layer()
@@ -20,5 +22,7 @@ async fn main() {
 
     // dbg!(scrape_and_insert_all_isins().await);
     // dbg!(run_share_refresh().await);
-    dbg!(run_scrape_and_insert().await);
+    dbg!(run_scrape_and_insert(&config.database).await);
+
+    Ok(())
 }
