@@ -1,0 +1,13 @@
+# Safe defaults for local development. Keep secrets such as DATABASE_URL in .env or the environment.
+
+[server]
+# One socket address avoids separate host/port combinations that can disagree.
+bind_address = "127.0.0.1:3000"
+
+[logging]
+# RUST_LOG overrides this value when set.
+level = "info"
+# Preserve current behavior by logging to both stdout and a file.
+stdout = true
+server_file_path = "../server.log"
+scraper_file_path = "share_scraper.log"

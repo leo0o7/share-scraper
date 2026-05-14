@@ -1,3 +1,4 @@
+use app_config::{load_config, LoggingConfig};
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -7,8 +8,9 @@ use db::isins::query_all_isins;
 use db::shares::{query_share_with, ShareQuery};
 use scraper::shares::Share;
 use sqlx::PgPool;
+use std::fs::File;
 use std::sync::Arc;
-use std::{net::SocketAddr, sync::Mutex};
+use std::sync::Mutex;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -18,19 +20,9 @@ struct AppState {
 }
 
 #[tokio::main]
-async fn main() {
-    let log_file = std::fs::File::create("../server.log").expect("Can't create log file");
-
-    let file_logger = tracing_subscriber::fmt::layer()
-        .with_writer(Mutex::new(log_file))
-        .with_ansi(false);
-    let stdout_logger = tracing_subscriber::fmt::layer().with_ansi(true);
-
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(file_logger)
-        .with(stdout_logger)
-        .init();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(env!("CARGO_MANIFEST_DIR"))?;
+    init_logging(&config.logging)?;
 
     info!("Starting server...");
 
@@ -50,13 +42,37 @@ async fn main() {
         .route("/share", get(query_share))
         .with_state(shared_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(config.server.bind_address).await?;
 
-    info!("Started server at http://127.0.0.1:3000");
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+    info!("Started server at http://{}", config.server.bind_address);
+    axum::serve(listener, app.into_make_service()).await?;
+
+    Ok(())
+}
+
+fn init_logging(config: &LoggingConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let log_file = File::create(&config.server_file_path)?;
+
+    let file_logger = tracing_subscriber::fmt::layer()
+        .with_writer(Mutex::new(log_file))
+        .with_ansi(false);
+    let env_filter = EnvFilter::try_new(&config.level)?;
+
+    if config.stdout {
+        let stdout_logger = tracing_subscriber::fmt::layer().with_ansi(true);
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_logger)
+            .with(stdout_logger)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_logger)
+            .init();
+    }
+
+    Ok(())
 }
 
 async fn all_isins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
