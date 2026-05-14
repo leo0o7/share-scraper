@@ -25,6 +25,7 @@ pub enum ConfigError {
     InvalidScraperShareRefreshAgeMinutes,
     InvalidScraperShareConcurrency,
     InvalidScraperShareTimeoutSeconds,
+    InvalidScraperIsinMaxPagesPerLetter,
     InvalidScraperParseThreads,
     InvalidScraperHttpTimeout(&'static str),
     InvalidScraperRetryDuration(&'static str),
@@ -68,6 +69,12 @@ impl Display for ConfigError {
             }
             ConfigError::InvalidScraperShareTimeoutSeconds => {
                 write!(f, "scraper.share_timeout_seconds must be greater than zero")
+            }
+            ConfigError::InvalidScraperIsinMaxPagesPerLetter => {
+                write!(
+                    f,
+                    "scraper.isin_max_pages_per_letter must be greater than zero"
+                )
             }
             ConfigError::InvalidScraperParseThreads => {
                 write!(
@@ -120,6 +127,7 @@ pub struct ScraperConfig {
     pub share_refresh_age: Duration,
     pub share_concurrency: usize,
     pub share_timeout: Duration,
+    pub isin_max_pages_per_letter: u8,
     pub parse_threads: Option<usize>,
     pub http_pool_max_idle_per_host: usize,
     pub http_request_timeout: Duration,
@@ -170,6 +178,7 @@ struct RawScraperConfig {
     share_refresh_age_minutes: u64,
     share_concurrency: usize,
     share_timeout_seconds: u64,
+    isin_max_pages_per_letter: u8,
     parse_threads: Option<usize>,
     http_pool_max_idle_per_host: usize,
     http_request_timeout_seconds: u64,
@@ -273,6 +282,9 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
     if raw.scraper.share_timeout_seconds == 0 {
         return Err(ConfigError::InvalidScraperShareTimeoutSeconds);
     }
+    if raw.scraper.isin_max_pages_per_letter == 0 {
+        return Err(ConfigError::InvalidScraperIsinMaxPagesPerLetter);
+    }
     if raw.scraper.parse_threads == Some(0) {
         return Err(ConfigError::InvalidScraperParseThreads);
     }
@@ -322,6 +334,7 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
             share_refresh_age: Duration::from_secs(share_refresh_age_seconds),
             share_concurrency: raw.scraper.share_concurrency,
             share_timeout: Duration::from_secs(raw.scraper.share_timeout_seconds),
+            isin_max_pages_per_letter: raw.scraper.isin_max_pages_per_letter,
             parse_threads: raw.scraper.parse_threads,
             http_pool_max_idle_per_host: raw.scraper.http_pool_max_idle_per_host,
             http_request_timeout: Duration::from_secs(raw.scraper.http_request_timeout_seconds),
@@ -520,6 +533,10 @@ mod tests {
                 [
                     ("SHARE_SERVICE__SCRAPER__SHARE_CONCURRENCY", Some("25")),
                     ("SHARE_SERVICE__SCRAPER__PARSE_THREADS", Some("2")),
+                    (
+                        "SHARE_SERVICE__SCRAPER__ISIN_MAX_PAGES_PER_LETTER",
+                        Some("12"),
+                    ),
                 ],
                 || {
                     let root = tempdir().unwrap();
@@ -530,6 +547,29 @@ mod tests {
                     assert_eq!(config.scraper.share_concurrency, 25);
                     assert_eq!(config.scraper.share_timeout.as_secs(), 5 * 60);
                     assert_eq!(config.scraper.parse_threads, Some(2));
+                    assert_eq!(config.scraper.isin_max_pages_per_letter, 12);
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_zero_isin_page_cap() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__ISIN_MAX_PAGES_PER_LETTER",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(
+                        err,
+                        ConfigError::InvalidScraperIsinMaxPagesPerLetter
+                    ));
                 },
             )
         });
@@ -666,6 +706,7 @@ mod tests {
         assert!(!config.contains("url ="));
         assert!(config.contains("acquire_timeout_seconds"));
         assert!(config.contains("share_refresh_age_minutes"));
+        assert!(config.contains("isin_max_pages_per_letter = 20"));
         assert!(config.contains("share_timeout_seconds"));
         assert!(config.contains("http_request_timeout_seconds"));
         assert!(config.contains("http_connect_timeout_seconds"));
@@ -713,6 +754,7 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+isin_max_pages_per_letter = 20
 share_concurrency = 200
 share_timeout_seconds = 300
 http_pool_max_idle_per_host = 200
@@ -755,6 +797,7 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+isin_max_pages_per_letter = 20
 share_concurrency = 200
 share_timeout_seconds = 300
 http_pool_max_idle_per_host = 200

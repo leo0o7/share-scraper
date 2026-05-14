@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, future::Future};
 
 use futures::{stream::FuturesUnordered, StreamExt};
 use html_scraper::Html;
@@ -6,31 +6,49 @@ use tracing::{debug, info_span, warn, Instrument};
 use types::ShareIsin;
 
 use crate::{
+    errors::ScraperResult,
     metrics::{ScrapingMetrics, WithMetrics},
     ScraperRuntime,
 };
 
+mod company_candidate;
 pub mod types;
 
+use company_candidate::{
+    company_page_signature, extract_company_elements, parse_elements, CompanyPageSignature,
+};
+
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
+    scrape_all_isins_with_fetcher(
+        b'A'..=b'Z',
+        runtime.isin_max_pages_per_letter(),
+        |letter, page| async move { fetch_isins_page(runtime, letter as char, page).await },
+    )
+    .await
+}
+
+async fn scrape_all_isins_with_fetcher<I, F, Fut>(
+    letters: I,
+    max_pages: u8,
+    fetch_page: F,
+) -> WithMetrics<HashSet<ShareIsin>>
+where
+    I: IntoIterator<Item = u8>,
+    F: Fn(u8, u8) -> Fut + Clone,
+    Fut: Future<Output = ScraperResult<String>>,
+{
     let mut metrics = ScrapingMetrics::empty();
     let mut tasks = FuturesUnordered::new();
 
-    // WARN: it currently scrapes some ISINs multiple times
-    //  if the last page for ISINs is X, scraping page X + Y still shows the ISINs at page X.
-    // I need to use crawling for this...
-    // TODO: use crawling to check pages
-    for letter in b'A'..=b'Z' {
-        for page in 1..=9 {
-            let letter = letter as char;
-            tasks.push(
-                scrape_isins_at_page(runtime, letter, page).instrument(info_span!(
-                    "scraping isins",
-                    letter = letter.to_string(),
-                    page = page
-                )),
-            );
-        }
+    for letter in letters {
+        let letter = letter as char;
+        let fetch_page = fetch_page.clone();
+        tasks.push(
+            crawl_isins_for_letter_with_fetcher(letter, max_pages, move |page| {
+                fetch_page(letter as u8, page)
+            })
+            .instrument(info_span!("scraping isins", letter = letter.to_string())),
+        );
     }
 
     let mut res: HashSet<ShareIsin> = HashSet::new();
@@ -43,33 +61,49 @@ pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<S
     WithMetrics::new(res, metrics)
 }
 
-async fn scrape_isins_at_page(
-    runtime: &ScraperRuntime,
+async fn crawl_isins_for_letter_with_fetcher<F, Fut>(
     letter: char,
-    page: u8,
-) -> WithMetrics<HashSet<ShareIsin>> {
-    debug!("Scraping ISINs at {} for letter {}", page, letter);
-
-    let url = format!(
-        "https://www.borsaitaliana.it/borsa/azioni/listino-a-z.html?initial={}&page={}&lang=it",
-        letter, page
-    );
-
+    max_pages: u8,
+    mut fetch_page: F,
+) -> WithMetrics<HashSet<ShareIsin>>
+where
+    F: FnMut(u8) -> Fut,
+    Fut: Future<Output = ScraperResult<String>>,
+{
     let mut res: HashSet<ShareIsin> = HashSet::new();
     let mut metrics = ScrapingMetrics::empty();
+    let mut seen_signatures: HashSet<CompanyPageSignature> = HashSet::new();
+    let mut repeated_page_found = false;
 
-    let res_txt = runtime
-        .get_page_text(url)
-        .instrument(info_span!("fetching_page"))
-        .await;
+    for page in 1..=max_pages {
+        debug!("Scraping ISINs at {} for letter {}", page, letter);
 
-    match res_txt {
-        Ok(txt) => {
-            let mut isins = parse_page(txt);
-            res.extend(isins.unmetric());
-            metrics = metrics + isins.metrics;
+        match fetch_page(page).await {
+            Ok(txt) => {
+                let doc = Html::parse_document(&txt);
+                let isin_elements = extract_company_elements(&doc);
+                let current_signature = company_page_signature(&isin_elements);
+
+                if !seen_signatures.insert(current_signature) {
+                    debug!("Found repeated ISIN page {} for letter {}", page, letter);
+                    repeated_page_found = true;
+                    break;
+                }
+
+                let mut isins = parse_elements(isin_elements);
+                res.extend(isins.unmetric());
+                metrics = metrics + isins.metrics;
+            }
+            Err(e) => metrics.errors.update(e),
         }
-        Err(e) => metrics.errors.update(e),
+    }
+
+    if !repeated_page_found {
+        warn!(
+            letter = %letter,
+            max_pages,
+            "ISIN letter page cap reached before repeated page was detected; returning partial results"
+        );
     }
 
     debug!("Found {} ISINs", res.len());
@@ -77,34 +111,313 @@ async fn scrape_isins_at_page(
     WithMetrics::new(res, metrics)
 }
 
+async fn fetch_isins_page(
+    runtime: &ScraperRuntime,
+    letter: char,
+    page: u8,
+) -> ScraperResult<String> {
+    let url = format!(
+        "https://www.borsaitaliana.it/borsa/azioni/listino-a-z.html?initial={}&page={}&lang=it",
+        letter, page
+    );
+
+    runtime
+        .get_page_text(url)
+        .instrument(info_span!("fetching_page"))
+        .await
+}
+
+#[cfg(test)]
 fn parse_page(res_txt: String) -> WithMetrics<HashSet<ShareIsin>> {
     debug!("Parsing ISIN page");
 
     let doc = Html::parse_document(&res_txt);
-    let isin_element_selector = html_scraper::Selector::parse(
-        "div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a.u-hidden.-xs",
-    )
-    .unwrap();
+    parse_elements(extract_company_elements(&doc))
+}
 
-    let mut res: HashSet<ShareIsin> = HashSet::new();
-    let mut metrics = ScrapingMetrics::empty();
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
 
-    let all_isin_elements = doc.select(&isin_element_selector);
+    use crate::errors::ScrapingError;
+    use tokio::sync::{mpsc, Notify};
 
-    all_isin_elements.for_each(|e| {
-        metrics.total += 1;
-        match ShareIsin::from_element(e) {
-            Ok(result) => {
-                metrics.successful += 1;
-                res.insert(result);
-            }
-            Err(e) => {
-                warn!("ISIN creation failed: {:?}", e);
-                metrics.errors.update(e)
-            }
+    use super::{parse_page, scrape_all_isins_with_fetcher};
+
+    #[test]
+    fn parses_company_href_with_market_suffix_as_website_isin_token() {
+        let html = r#"
+            <div data-bb-view="list-aZ-stream">
+                <table class="m-table -firstlevel">
+                    <tr>
+                        <td>
+                            <a class="u-hidden -xs" href="/borsa/azioni/euronext-growth-milan/scheda/IT0005439861-EXGM.html?lang=it">
+                                <span class="t-text">Example Share</span>
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        "#;
+
+        let mut parsed = parse_page(html.to_string());
+        let isins = parsed.unmetric();
+
+        assert_eq!(parsed.metrics.total, 1);
+        assert_eq!(parsed.metrics.successful, 1);
+        assert_eq!(parsed.metrics.errors.parsing_error, 0);
+
+        let share = isins.iter().next().expect("expected parsed share isin");
+        assert_eq!(share.share_name, "Example Share");
+        assert_eq!(share.isin.to_string(), "IT0005439861");
+    }
+
+    #[test]
+    fn prefers_desktop_company_links_and_ignores_listing_controls() {
+        let html = r#"
+            <div data-bb-view="list-aZ-stream">
+                <a href="/borsa/azioni/listino-a-z.html?initial=A">A</a>
+                <a href="/borsa/azioni/listino-a-z.html?initial=A&page=2">2</a>
+                <table class="m-table -firstlevel">
+                    <tr>
+                        <td>
+                            <a class="u-visible -xs" href="/borsa/azioni/scheda/IT0003128367.html">
+                                <span class="t-text">Mobile Name Should Not Win</span>
+                            </a>
+                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0003128367.html">
+                                <span class="t-text">Enel</span>
+                            </a>
+                            <a href="/borsa/azioni/scheda/IT0003128367.html?add-to-portfolio=true">Portfolio</a>
+                            <a href="/borsa/azioni/scheda/IT0000072618.html">
+                                <span class="t-text">Fallback Link Should Not Be Used</span>
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        "#;
+
+        let mut parsed = parse_page(html.to_string());
+        let isins = parsed.unmetric();
+
+        assert_eq!(parsed.metrics.total, 1);
+        assert_eq!(parsed.metrics.successful, 1);
+        assert_eq!(parsed.metrics.errors.parsing_error, 0);
+        assert_eq!(isins.len(), 1);
+
+        let share = isins.iter().next().expect("expected parsed share isin");
+        assert_eq!(share.share_name, "Enel");
+        assert_eq!(share.isin.to_string(), "IT0003128367");
+    }
+
+    #[test]
+    fn falls_back_to_unique_company_links_when_desktop_links_are_absent() {
+        let html = r#"
+            <div data-bb-view="list-aZ-stream">
+                <table class="m-table -firstlevel">
+                    <tr>
+                        <td>
+                            <a class="u-visible -xs" href="/borsa/azioni/scheda/IT0000072618.html">
+                                <span class="t-text">Intesa Sanpaolo</span>
+                            </a>
+                            <a class="u-visible -xs" href="/borsa/azioni/scheda/IT0000072618.html">
+                                <span class="t-text">Intesa Sanpaolo Duplicate</span>
+                            </a>
+                            <a class="u-visible -xs" href="/borsa/azioni/scheda/IT0005439861-EXGM.html">
+                                <span class="t-text">Example Share</span>
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        "#;
+
+        let mut parsed = parse_page(html.to_string());
+        let isins = parsed.unmetric();
+
+        assert_eq!(parsed.metrics.total, 2);
+        assert_eq!(parsed.metrics.successful, 2);
+        assert_eq!(parsed.metrics.errors.parsing_error, 0);
+        assert_eq!(isins.len(), 2);
+        assert!(isins.iter().any(|share| {
+            share.share_name == "Intesa Sanpaolo" && share.isin.to_string() == "IT0000072618"
+        }));
+        assert!(isins.iter().any(|share| {
+            share.share_name == "Example Share" && share.isin.to_string() == "IT0005439861"
+        }));
+    }
+
+    #[tokio::test]
+    async fn scrape_all_crawls_letters_concurrently_and_stops_before_repeated_or_capped_pages() {
+        fn page_html(letter: u8) -> String {
+            let index = letter - b'A' + 1;
+            let isin = format!("IT{index:010}");
+            let name = format!("Share {}", letter as char);
+            let malformed = if letter == b'A' {
+                r#"
+                <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT000000000X.html">
+                    <span class="t-text">Malformed</span>
+                </a>
+                "#
+            } else {
+                ""
+            };
+
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/{isin}.html">
+                                    <span class="t-text">{name}</span>
+                                </a>
+                                {malformed}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
         }
-    });
-    debug!("Metrics for parsing: {:?}", metrics);
 
-    WithMetrics::new(res, metrics)
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let release_first_pages = Arc::new(Notify::new());
+
+        let scrape_task = tokio::spawn({
+            let release_first_pages = Arc::clone(&release_first_pages);
+            async move {
+                scrape_all_isins_with_fetcher(b'A'..=b'Z', 2, move |letter, page| {
+                    let started_tx = started_tx.clone();
+                    let release_first_pages = Arc::clone(&release_first_pages);
+
+                    async move {
+                        started_tx.send((letter, page)).unwrap();
+
+                        if page == 1 {
+                            release_first_pages.notified().await;
+                        }
+
+                        Ok::<_, ScrapingError>(page_html(letter))
+                    }
+                })
+                .await
+            }
+        });
+
+        let mut first_starts = Vec::new();
+        for _ in b'A'..=b'Z' {
+            first_starts.push(
+                tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                    .await
+                    .expect("timed out waiting for letter crawl to start")
+                    .expect("start channel closed before every letter started"),
+            );
+        }
+
+        assert!(first_starts.iter().all(|(_, page)| *page == 1));
+
+        release_first_pages.notify_waiters();
+
+        let mut scraped = scrape_task.await.expect("scrape task should finish");
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 26);
+        assert_eq!(scraped.metrics.total, 27);
+        assert_eq!(scraped.metrics.successful, 26);
+        assert_eq!(scraped.metrics.errors.parsing_error, 1);
+
+        let mut capped =
+            scrape_all_isins_with_fetcher(b'A'..=b'A', 1, move |letter, page| async move {
+                assert_eq!(page, 1);
+                Ok::<_, ScrapingError>(page_html(letter))
+            })
+            .await;
+        let capped_isins = capped.unmetric();
+
+        assert_eq!(capped_isins.len(), 1);
+        assert_eq!(capped.metrics.total, 2);
+        assert_eq!(capped.metrics.successful, 1);
+        assert_eq!(capped.metrics.errors.parsing_error, 1);
+    }
+
+    #[tokio::test]
+    async fn repeated_page_detection_uses_stable_isin_signature() {
+        fn page_html(name: &str) -> String {
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0003128367-MTAA.html?lang=it">
+                                    <span class="t-text">{name}</span>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
+        }
+
+        let mut scraped =
+            scrape_all_isins_with_fetcher(b'S'..=b'S', 2, move |_letter, page| async move {
+                let name = if page == 1 {
+                    "Stable Name"
+                } else {
+                    "Changed Name"
+                };
+
+                Ok::<_, ScrapingError>(page_html(name))
+            })
+            .await;
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 1);
+        assert_eq!(scraped.metrics.total, 1);
+        assert_eq!(scraped.metrics.successful, 1);
+
+        let share = isins.iter().next().expect("expected parsed share isin");
+        assert_eq!(share.share_name, "Stable Name");
+        assert_eq!(share.isin.to_string(), "IT0003128367");
+    }
+
+    #[tokio::test]
+    async fn repeated_page_detection_stops_on_non_adjacent_repeats() {
+        fn page_html(isin: &str) -> String {
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/{isin}-MTAA.html?lang=it">
+                                    <span class="t-text">{isin}</span>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
+        }
+
+        let mut scraped =
+            scrape_all_isins_with_fetcher(b'C'..=b'C', 3, move |_letter, page| async move {
+                let isin = match page {
+                    1 | 3 => "IT0003128367",
+                    2 => "IT0000072618",
+                    _ => unreachable!(),
+                };
+
+                Ok::<_, ScrapingError>(page_html(isin))
+            })
+            .await;
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 2);
+        assert_eq!(scraped.metrics.total, 2);
+        assert_eq!(scraped.metrics.successful, 2);
+    }
 }

@@ -23,6 +23,8 @@ share_refresh_age_minutes = 15
 # Preserve previous share scraping pressure and per-share timeout behavior.
 share_concurrency = 200
 share_timeout_seconds = 300
+# Cap each A-Z letter crawl so repeated-page detection cannot run unbounded.
+isin_max_pages_per_letter = 20
 # Omit parse_threads to keep the dynamic CPU-count default; set it to pin parser workers.
 # Preserve the previous static reqwest client behavior.
 http_pool_max_idle_per_host = 200

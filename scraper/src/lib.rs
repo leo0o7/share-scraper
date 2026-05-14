@@ -30,6 +30,7 @@ pub struct ScraperRuntime {
     parse_pool: Arc<rayon::ThreadPool>,
     share_concurrency: usize,
     share_timeout: Duration,
+    isin_max_pages_per_letter: u8,
 }
 
 impl ScraperRuntime {
@@ -54,6 +55,7 @@ impl ScraperRuntime {
             parse_pool: Arc::new(parse_pool),
             share_concurrency: config.share_concurrency,
             share_timeout: config.share_timeout,
+            isin_max_pages_per_letter: config.isin_max_pages_per_letter,
         })
     }
 
@@ -63,6 +65,10 @@ impl ScraperRuntime {
 
     pub fn share_timeout(&self) -> Duration {
         self.share_timeout
+    }
+
+    pub fn isin_max_pages_per_letter(&self) -> u8 {
+        self.isin_max_pages_per_letter
     }
 
     pub async fn get_page_text(&self, url: String) -> ScraperResult<String> {
