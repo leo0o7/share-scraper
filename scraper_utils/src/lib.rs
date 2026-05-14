@@ -72,7 +72,7 @@ fn chrono_share_refresh_age(config: &ScraperConfig) -> chrono::Duration {
         .expect("validated scraper refresh age should fit chrono duration")
 }
 
-#[instrument(skip(runtime))]
+#[instrument(skip_all)]
 pub async fn refresh_shares(
     database_config: &DatabaseConfig,
     runtime: &ScraperRuntime,
@@ -94,7 +94,7 @@ pub async fn refresh_shares(
     }
 }
 
-#[instrument(skip(runtime))]
+#[instrument(skip_all)]
 pub async fn scrape_and_insert_all_shares(
     database_config: &DatabaseConfig,
     runtime: &ScraperRuntime,
@@ -115,7 +115,7 @@ pub async fn scrape_and_insert_all_shares(
     }
 }
 
-#[instrument(skip(runtime))]
+#[instrument(skip_all)]
 pub async fn scrape_and_insert_all_isins(
     database_config: &DatabaseConfig,
     runtime: &ScraperRuntime,
