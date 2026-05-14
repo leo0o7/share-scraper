@@ -17,14 +17,35 @@ pub mod types;
 const ISIN_PAGES_PER_LETTER: u8 = 9;
 
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
+    scrape_all_isins_with_fetcher(
+        b'A'..=b'Z',
+        ISIN_PAGES_PER_LETTER,
+        |letter, page| async move { fetch_isins_page(runtime, letter as char, page).await },
+    )
+    .await
+}
+
+async fn scrape_all_isins_with_fetcher<I, F, Fut>(
+    letters: I,
+    max_pages: u8,
+    fetch_page: F,
+) -> WithMetrics<HashSet<ShareIsin>>
+where
+    I: IntoIterator<Item = u8>,
+    F: Fn(u8, u8) -> Fut + Clone,
+    Fut: Future<Output = ScraperResult<String>>,
+{
     let mut metrics = ScrapingMetrics::empty();
     let mut tasks = FuturesUnordered::new();
 
-    for letter in b'A'..=b'Z' {
+    for letter in letters {
         let letter = letter as char;
+        let fetch_page = fetch_page.clone();
         tasks.push(
-            crawl_isins_for_letter(runtime, letter, ISIN_PAGES_PER_LETTER)
-                .instrument(info_span!("scraping isins", letter = letter.to_string())),
+            crawl_isins_for_letter_with_fetcher(letter, max_pages, move |page| {
+                fetch_page(letter as u8, page)
+            })
+            .instrument(info_span!("scraping isins", letter = letter.to_string())),
         );
     }
 
@@ -36,17 +57,6 @@ pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<S
     }
 
     WithMetrics::new(res, metrics)
-}
-
-async fn crawl_isins_for_letter(
-    runtime: &ScraperRuntime,
-    letter: char,
-    max_pages: u8,
-) -> WithMetrics<HashSet<ShareIsin>> {
-    crawl_isins_for_letter_with_fetcher(letter, max_pages, |page| async move {
-        fetch_isins_page(runtime, letter, page).await
-    })
-    .await
 }
 
 async fn crawl_isins_for_letter_with_fetcher<F, Fut>(
@@ -218,11 +228,12 @@ fn is_company_detail_href(href: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::VecDeque, future::ready, rc::Rc};
+    use std::{sync::Arc, time::Duration};
 
     use crate::errors::ScrapingError;
+    use tokio::sync::{mpsc, Notify};
 
-    use super::{crawl_isins_for_letter_with_fetcher, parse_page};
+    use super::{parse_page, scrape_all_isins_with_fetcher};
 
     #[test]
     fn parses_company_href_with_market_suffix_as_website_isin_token() {
@@ -328,69 +339,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stops_on_repeated_letter_page_without_counting_sentinel_records_or_metrics() {
-        let repeated_page = r#"
-            <div data-bb-view="list-aZ-stream">
-                <table class="m-table -firstlevel">
-                    <tr>
-                        <td>
-                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0003128367.html">
-                                <span class="t-text">Enel</span>
-                            </a>
-                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT000000000X.html">
-                                <span class="t-text">Malformed</span>
-                            </a>
-                        </td>
-                    </tr>
-                </table>
-            </div>
-        "#;
-        let later_page = r#"
-            <div data-bb-view="list-aZ-stream">
-                <table class="m-table -firstlevel">
-                    <tr>
-                        <td>
-                            <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT0000072618.html">
-                                <span class="t-text">Intesa Sanpaolo</span>
-                            </a>
-                        </td>
-                    </tr>
-                </table>
-            </div>
-        "#;
-        let pages = Rc::new(RefCell::new(VecDeque::from([
-            repeated_page.to_string(),
-            repeated_page.to_string(),
-            later_page.to_string(),
-        ])));
-        let fetch_count = Rc::new(RefCell::new(0));
+    async fn scrape_all_crawls_letters_concurrently_and_excludes_repeated_sentinel_metrics() {
+        fn page_html(letter: u8) -> String {
+            let index = letter - b'A' + 1;
+            let isin = format!("IT{index:010}");
+            let name = format!("Share {}", letter as char);
+            let malformed = if letter == b'A' {
+                r#"
+                <a class="u-hidden -xs" href="/borsa/azioni/scheda/IT000000000X.html">
+                    <span class="t-text">Malformed</span>
+                </a>
+                "#
+            } else {
+                ""
+            };
 
-        let mut crawled = crawl_isins_for_letter_with_fetcher('E', 3, {
-            let pages = Rc::clone(&pages);
-            let fetch_count = Rc::clone(&fetch_count);
-            move |_| {
-                *fetch_count.borrow_mut() += 1;
-                let page = pages
-                    .borrow_mut()
-                    .pop_front()
-                    .expect("expected fixture page");
-                ready(Ok::<_, ScrapingError>(page))
+            format!(
+                r#"
+                <div data-bb-view="list-aZ-stream">
+                    <table class="m-table -firstlevel">
+                        <tr>
+                            <td>
+                                <a class="u-hidden -xs" href="/borsa/azioni/scheda/{isin}.html">
+                                    <span class="t-text">{name}</span>
+                                </a>
+                                {malformed}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                "#
+            )
+        }
+
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let release_first_pages = Arc::new(Notify::new());
+
+        let scrape_task = tokio::spawn({
+            let release_first_pages = Arc::clone(&release_first_pages);
+            async move {
+                scrape_all_isins_with_fetcher(b'A'..=b'Z', 2, move |letter, page| {
+                    let started_tx = started_tx.clone();
+                    let release_first_pages = Arc::clone(&release_first_pages);
+
+                    async move {
+                        started_tx.send((letter, page)).unwrap();
+
+                        if page == 1 {
+                            release_first_pages.notified().await;
+                        }
+
+                        Ok::<_, ScrapingError>(page_html(letter))
+                    }
+                })
+                .await
             }
-        })
-        .await;
+        });
 
-        let isins = crawled.unmetric();
+        let mut first_starts = Vec::new();
+        for _ in b'A'..=b'Z' {
+            first_starts.push(
+                tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                    .await
+                    .expect("timed out waiting for letter crawl to start")
+                    .expect("start channel closed before every letter started"),
+            );
+        }
 
-        assert_eq!(*fetch_count.borrow(), 2);
-        assert_eq!(crawled.metrics.total, 2);
-        assert_eq!(crawled.metrics.successful, 1);
-        assert_eq!(crawled.metrics.errors.parsing_error, 1);
-        assert_eq!(isins.len(), 1);
-        assert!(isins
-            .iter()
-            .any(|share| share.share_name == "Enel" && share.isin.to_string() == "IT0003128367"));
-        assert!(!isins
-            .iter()
-            .any(|share| share.share_name == "Intesa Sanpaolo"));
+        assert!(first_starts.iter().all(|(_, page)| *page == 1));
+
+        release_first_pages.notify_waiters();
+
+        let mut scraped = scrape_task.await.expect("scrape task should finish");
+        let isins = scraped.unmetric();
+
+        assert_eq!(isins.len(), 26);
+        assert_eq!(scraped.metrics.total, 27);
+        assert_eq!(scraped.metrics.successful, 26);
+        assert_eq!(scraped.metrics.errors.parsing_error, 1);
     }
 }
