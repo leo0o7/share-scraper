@@ -10,7 +10,7 @@ use errors::{ScraperResult, ScrapingError};
 use reqwest::Client;
 use tracing::{debug, debug_span, error, Instrument};
 
-use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
+use crate::exponential_backoff::{exponential_backoff, BackoffConfig, BackoffMessage};
 
 const USER_AGENTS: &[&str] = &[
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -21,6 +21,7 @@ const USER_AGENTS: &[&str] = &[
 #[derive(Clone)]
 pub struct ScraperRuntime {
     client: Client,
+    backoff_config: BackoffConfig,
 }
 
 impl ScraperRuntime {
@@ -34,12 +35,20 @@ impl ScraperRuntime {
             .connect_timeout(config.http_connect_timeout)
             .build()?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            backoff_config: BackoffConfig {
+                retry_count: config.retry_count,
+                total_timeout: config.retry_total_timeout,
+                base_delay: config.retry_base_delay,
+                jitter_max: config.retry_jitter_max,
+            },
+        })
     }
 
     pub async fn get_page_text(&self, url: String) -> ScraperResult<String> {
         let url = url.as_str();
-        let page_response = exponential_backoff(|| async {
+        let page_response = exponential_backoff(&self.backoff_config, || async {
             let ua = USER_AGENTS[rand::random_range(0..USER_AGENTS.len())];
             match self
                 .client

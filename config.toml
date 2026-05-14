@@ -26,3 +26,8 @@ http_request_timeout_seconds = 30
 http_connect_timeout_seconds = 10
 http_idle_timeout_seconds = 15
 http_keepalive_seconds = 30
+# Preserve the existing exponential backoff behavior.
+retry_count = 8
+retry_total_timeout_seconds = 128
+retry_base_delay_milliseconds = 500
+retry_jitter_max_milliseconds = 1000

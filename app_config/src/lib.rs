@@ -24,6 +24,7 @@ pub enum ConfigError {
     InvalidDatabaseAcquireTimeoutSeconds,
     InvalidScraperShareRefreshAgeMinutes,
     InvalidScraperHttpTimeout(&'static str),
+    InvalidScraperRetryDuration(&'static str),
 }
 
 impl Display for ConfigError {
@@ -60,6 +61,9 @@ impl Display for ConfigError {
                 "scraper.share_refresh_age_minutes must be greater than zero"
             ),
             ConfigError::InvalidScraperHttpTimeout(field) => {
+                write!(f, "scraper.{field} must be greater than zero")
+            }
+            ConfigError::InvalidScraperRetryDuration(field) => {
                 write!(f, "scraper.{field} must be greater than zero")
             }
         }
@@ -104,6 +108,10 @@ pub struct ScraperConfig {
     pub http_connect_timeout: Duration,
     pub http_idle_timeout: Duration,
     pub http_keepalive: Duration,
+    pub retry_count: u32,
+    pub retry_total_timeout: Duration,
+    pub retry_base_delay: Duration,
+    pub retry_jitter_max: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +150,10 @@ struct RawScraperConfig {
     http_connect_timeout_seconds: u64,
     http_idle_timeout_seconds: u64,
     http_keepalive_seconds: u64,
+    retry_count: u32,
+    retry_total_timeout_seconds: u64,
+    retry_base_delay_milliseconds: u64,
+    retry_jitter_max_milliseconds: u64,
 }
 
 pub fn load_config(manifest_dir: impl AsRef<Path>) -> ConfigResult<AppConfig> {
@@ -245,6 +257,18 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
         "http_keepalive_seconds",
         raw.scraper.http_keepalive_seconds,
     )?;
+    validate_nonzero_scraper_retry_duration(
+        "retry_total_timeout_seconds",
+        raw.scraper.retry_total_timeout_seconds,
+    )?;
+    validate_nonzero_scraper_retry_duration(
+        "retry_base_delay_milliseconds",
+        raw.scraper.retry_base_delay_milliseconds,
+    )?;
+    validate_nonzero_scraper_retry_duration(
+        "retry_jitter_max_milliseconds",
+        raw.scraper.retry_jitter_max_milliseconds,
+    )?;
 
     Ok(AppConfig {
         server: ServerConfig { bind_address },
@@ -266,6 +290,10 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
             http_connect_timeout: Duration::from_secs(raw.scraper.http_connect_timeout_seconds),
             http_idle_timeout: Duration::from_secs(raw.scraper.http_idle_timeout_seconds),
             http_keepalive: Duration::from_secs(raw.scraper.http_keepalive_seconds),
+            retry_count: raw.scraper.retry_count,
+            retry_total_timeout: Duration::from_secs(raw.scraper.retry_total_timeout_seconds),
+            retry_base_delay: Duration::from_millis(raw.scraper.retry_base_delay_milliseconds),
+            retry_jitter_max: Duration::from_millis(raw.scraper.retry_jitter_max_milliseconds),
         },
     })
 }
@@ -273,6 +301,14 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
 fn validate_nonzero_scraper_duration(field: &'static str, value: u64) -> ConfigResult<()> {
     if value == 0 {
         return Err(ConfigError::InvalidScraperHttpTimeout(field));
+    }
+
+    Ok(())
+}
+
+fn validate_nonzero_scraper_retry_duration(field: &'static str, value: u64) -> ConfigResult<()> {
+    if value == 0 {
+        return Err(ConfigError::InvalidScraperRetryDuration(field));
     }
 
     Ok(())
@@ -420,6 +456,24 @@ mod tests {
 
     #[test]
     #[serial]
+    fn loads_configured_scraper_retry_settings() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var("SHARE_SERVICE__SCRAPER__RETRY_COUNT", Some("4"), || {
+                let root = tempdir().unwrap();
+                write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                let config = load_config(root.path()).unwrap();
+
+                assert_eq!(config.scraper.retry_count, 4);
+                assert_eq!(config.scraper.retry_total_timeout.as_secs(), 128);
+                assert_eq!(config.scraper.retry_base_delay.as_millis(), 500);
+                assert_eq!(config.scraper.retry_jitter_max.as_millis(), 1000);
+            })
+        });
+    }
+
+    #[test]
+    #[serial]
     fn rejects_zero_share_refresh_age() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
@@ -456,6 +510,28 @@ mod tests {
                     assert!(matches!(
                         err,
                         ConfigError::InvalidScraperHttpTimeout("http_request_timeout_seconds")
+                    ));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_zero_scraper_retry_delay() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__RETRY_BASE_DELAY_MILLISECONDS",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(
+                        err,
+                        ConfigError::InvalidScraperRetryDuration("retry_base_delay_milliseconds")
                     ));
                 },
             )
@@ -521,6 +597,10 @@ http_request_timeout_seconds = 30
 http_connect_timeout_seconds = 10
 http_idle_timeout_seconds = 15
 http_keepalive_seconds = 30
+retry_count = 8
+retry_total_timeout_seconds = 128
+retry_base_delay_milliseconds = 500
+retry_jitter_max_milliseconds = 1000
 "#
             ),
         )
@@ -557,6 +637,10 @@ http_request_timeout_seconds = 30
 http_connect_timeout_seconds = 10
 http_idle_timeout_seconds = 15
 http_keepalive_seconds = 30
+retry_count = 8
+retry_total_timeout_seconds = 128
+retry_base_delay_milliseconds = 500
+retry_jitter_max_milliseconds = 1000
 "#
             ),
         )

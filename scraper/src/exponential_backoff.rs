@@ -7,8 +7,6 @@ use tracing::debug;
 
 use crate::get_elapsed_time;
 
-const MAX_RETRIES: u32 = 8;
-
 pub enum BackoffMessage<T> {
     Retry,
     Exit,
@@ -21,17 +19,28 @@ pub enum BackoffError {
     Timeout,
 }
 
-pub async fn exponential_backoff<T, F, Fut>(action: F) -> Result<T, BackoffError>
+#[derive(Debug, Clone)]
+pub struct BackoffConfig {
+    pub retry_count: u32,
+    pub total_timeout: Duration,
+    pub base_delay: Duration,
+    pub jitter_max: Duration,
+}
+
+pub async fn exponential_backoff<T, F, Fut>(
+    config: &BackoffConfig,
+    action: F,
+) -> Result<T, BackoffError>
 where
     F: Fn() -> Fut,
     Fut: future::Future<Output = BackoffMessage<T>>,
 {
     let start_time = Utc::now().time();
     let mut try_count = 0;
-    let max_total_duration = Duration::from_secs(128);
+    let max_total_duration = config.total_timeout;
 
     match timeout(max_total_duration, async {
-        while try_count <= MAX_RETRIES {
+        while try_count <= config.retry_count {
             match action().await {
                 BackoffMessage::Return(res) => {
                     debug!(
@@ -42,12 +51,17 @@ where
                 }
                 BackoffMessage::Retry => {
                     try_count += 1;
-                    if try_count > MAX_RETRIES {
+                    if try_count > config.retry_count {
                         debug!("Reached max retries. Exiting.");
                         break;
                     }
-                    let jitter = rand::random_range(0..1000);
-                    let wait_time = Duration::from_millis(2u64.pow(try_count) * 500 + jitter);
+                    let jitter_max =
+                        u64::try_from(config.jitter_max.as_millis()).unwrap_or(u64::MAX);
+                    let jitter = rand::random_range(0..jitter_max);
+                    let wait_time = config
+                        .base_delay
+                        .saturating_mul(2u32.saturating_pow(try_count))
+                        .saturating_add(Duration::from_millis(jitter));
 
                     select(
                         Box::pin(sleep(wait_time)),
