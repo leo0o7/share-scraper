@@ -23,6 +23,9 @@ pub enum ConfigError {
     InvalidDatabasePoolMaxConnections,
     InvalidDatabaseAcquireTimeoutSeconds,
     InvalidScraperShareRefreshAgeMinutes,
+    InvalidScraperShareConcurrency,
+    InvalidScraperShareTimeoutSeconds,
+    InvalidScraperParseThreads,
     InvalidScraperHttpTimeout(&'static str),
     InvalidScraperRetryDuration(&'static str),
 }
@@ -60,6 +63,18 @@ impl Display for ConfigError {
                 f,
                 "scraper.share_refresh_age_minutes must be greater than zero"
             ),
+            ConfigError::InvalidScraperShareConcurrency => {
+                write!(f, "scraper.share_concurrency must be greater than zero")
+            }
+            ConfigError::InvalidScraperShareTimeoutSeconds => {
+                write!(f, "scraper.share_timeout_seconds must be greater than zero")
+            }
+            ConfigError::InvalidScraperParseThreads => {
+                write!(
+                    f,
+                    "scraper.parse_threads must be greater than zero when set"
+                )
+            }
             ConfigError::InvalidScraperHttpTimeout(field) => {
                 write!(f, "scraper.{field} must be greater than zero")
             }
@@ -103,6 +118,9 @@ pub struct DatabaseConfig {
 #[derive(Debug, Clone)]
 pub struct ScraperConfig {
     pub share_refresh_age: Duration,
+    pub share_concurrency: usize,
+    pub share_timeout: Duration,
+    pub parse_threads: Option<usize>,
     pub http_pool_max_idle_per_host: usize,
     pub http_request_timeout: Duration,
     pub http_connect_timeout: Duration,
@@ -145,6 +163,9 @@ struct RawDatabaseConfig {
 #[derive(Debug, Deserialize)]
 struct RawScraperConfig {
     share_refresh_age_minutes: u64,
+    share_concurrency: usize,
+    share_timeout_seconds: u64,
+    parse_threads: Option<usize>,
     http_pool_max_idle_per_host: usize,
     http_request_timeout_seconds: u64,
     http_connect_timeout_seconds: u64,
@@ -241,6 +262,15 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
     if share_refresh_age_seconds == 0 || share_refresh_age_seconds > i64::MAX as u64 {
         return Err(ConfigError::InvalidScraperShareRefreshAgeMinutes);
     }
+    if raw.scraper.share_concurrency == 0 {
+        return Err(ConfigError::InvalidScraperShareConcurrency);
+    }
+    if raw.scraper.share_timeout_seconds == 0 {
+        return Err(ConfigError::InvalidScraperShareTimeoutSeconds);
+    }
+    if raw.scraper.parse_threads == Some(0) {
+        return Err(ConfigError::InvalidScraperParseThreads);
+    }
     validate_nonzero_scraper_duration(
         "http_request_timeout_seconds",
         raw.scraper.http_request_timeout_seconds,
@@ -285,6 +315,9 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
         },
         scraper: ScraperConfig {
             share_refresh_age: Duration::from_secs(share_refresh_age_seconds),
+            share_concurrency: raw.scraper.share_concurrency,
+            share_timeout: Duration::from_secs(raw.scraper.share_timeout_seconds),
+            parse_threads: raw.scraper.parse_threads,
             http_pool_max_idle_per_host: raw.scraper.http_pool_max_idle_per_host,
             http_request_timeout: Duration::from_secs(raw.scraper.http_request_timeout_seconds),
             http_connect_timeout: Duration::from_secs(raw.scraper.http_connect_timeout_seconds),
@@ -474,6 +507,29 @@ mod tests {
 
     #[test]
     #[serial]
+    fn loads_configured_share_execution_settings() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_vars(
+                [
+                    ("SHARE_SERVICE__SCRAPER__SHARE_CONCURRENCY", Some("25")),
+                    ("SHARE_SERVICE__SCRAPER__PARSE_THREADS", Some("2")),
+                ],
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let config = load_config(root.path()).unwrap();
+
+                    assert_eq!(config.scraper.share_concurrency, 25);
+                    assert_eq!(config.scraper.share_timeout.as_secs(), 5 * 60);
+                    assert_eq!(config.scraper.parse_threads, Some(2));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
     fn rejects_zero_share_refresh_age() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
@@ -488,6 +544,47 @@ mod tests {
                     assert!(matches!(
                         err,
                         ConfigError::InvalidScraperShareRefreshAgeMinutes
+                    ));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_zero_share_concurrency() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__SHARE_CONCURRENCY",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(err, ConfigError::InvalidScraperShareConcurrency));
+                },
+            )
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_zero_share_timeout() {
+        temp_env::with_var("RUST_LOG", None::<&str>, || {
+            temp_env::with_var(
+                "SHARE_SERVICE__SCRAPER__SHARE_TIMEOUT_SECONDS",
+                Some("0"),
+                || {
+                    let root = tempdir().unwrap();
+                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+
+                    let err = load_config(root.path()).unwrap_err();
+
+                    assert!(matches!(
+                        err,
+                        ConfigError::InvalidScraperShareTimeoutSeconds
                     ));
                 },
             )
@@ -592,6 +689,8 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+share_concurrency = 200
+share_timeout_seconds = 300
 http_pool_max_idle_per_host = 200
 http_request_timeout_seconds = 30
 http_connect_timeout_seconds = 10
@@ -632,6 +731,8 @@ acquire_timeout_seconds = 10
 
 [scraper]
 share_refresh_age_minutes = 15
+share_concurrency = 200
+share_timeout_seconds = 300
 http_pool_max_idle_per_host = 200
 http_request_timeout_seconds = 30
 http_connect_timeout_seconds = 10
