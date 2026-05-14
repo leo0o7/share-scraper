@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 use crate::shares::parsers::SafeParse;
 use chrono::NaiveDateTime;
-use scraper::ElementRef;
+use html_scraper::ElementRef;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -95,7 +95,7 @@ impl ShareIsin {
         debug!("Attempting to create ShareIsin from element");
 
         let isin_share_name_selector =
-            scraper::Selector::parse("span.t-text").map_err(|_| ScrapingError::ParsingErr)?;
+            html_scraper::Selector::parse("span.t-text").map_err(|_| ScrapingError::ParsingErr)?;
 
         let share_link_attr = isin_element
             .attr("href")

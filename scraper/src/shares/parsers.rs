@@ -1,9 +1,9 @@
 use std::num::{ParseFloatError, ParseIntError};
 
 use chrono::{NaiveDate, NaiveDateTime};
+use html_scraper::ElementRef;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use scraper::ElementRef;
 
 use super::models::{PriceDateReference, PriceDateTimeReference};
 

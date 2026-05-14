@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use futures::{stream::FuturesUnordered, StreamExt};
-use scraper::Html;
+use html_scraper::Html;
 use tracing::{debug, info_span, warn, Instrument};
 use types::ShareIsin;
 
@@ -74,7 +74,7 @@ fn parse_page(res_txt: String) -> WithMetrics<HashSet<ShareIsin>> {
     debug!("Parsing ISIN page");
 
     let doc = Html::parse_document(&res_txt);
-    let isin_element_selector = scraper::Selector::parse(
+    let isin_element_selector = html_scraper::Selector::parse(
         "div[data-bb-view=\"list-aZ-stream\"] table.m-table.-firstlevel a.u-hidden.-xs",
     )
     .unwrap();

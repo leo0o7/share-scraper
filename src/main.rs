@@ -1,7 +1,6 @@
 use std::sync::Mutex;
 
-// use scraper_utils::run_scrape_and_insert_isins;
-use scraper_utils::{run_scrape_and_insert, run_share_refresh, scrape_and_insert_all_isins};
+use scraper_utils::run_scrape_and_insert;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]

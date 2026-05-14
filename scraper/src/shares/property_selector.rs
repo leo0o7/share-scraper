@@ -1,5 +1,5 @@
+use html_scraper::{ElementRef, Html, Selector};
 use once_cell::sync::Lazy;
-use scraper::{ElementRef, Html, Selector};
 use std::collections::HashMap;
 use tracing::warn;
 

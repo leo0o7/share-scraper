@@ -4,10 +4,10 @@ mod property_selector;
 pub use models::{share::Share, ScrapableStruct};
 
 use futures::future::join_all;
+use html_scraper::Html;
 use once_cell::sync::Lazy;
-use scraper::Html;
 use std::{sync::Arc, time::Duration};
-use tokio::{sync::Semaphore, task, time::timeout};
+use tokio::{sync::Semaphore, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 
 use crate::{
