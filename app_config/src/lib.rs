@@ -126,10 +126,15 @@ pub struct ScraperConfig {
     pub http_connect_timeout: Duration,
     pub http_idle_timeout: Duration,
     pub http_keepalive: Duration,
+    pub backoff: BackoffConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackoffConfig {
     pub retry_count: u32,
-    pub retry_total_timeout: Duration,
-    pub retry_base_delay: Duration,
-    pub retry_jitter_max: Duration,
+    pub total_timeout: Duration,
+    pub base_delay: Duration,
+    pub jitter_max: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,10 +328,12 @@ fn validate_config(raw: RawAppConfig) -> ConfigResult<AppConfig> {
             http_connect_timeout: Duration::from_secs(raw.scraper.http_connect_timeout_seconds),
             http_idle_timeout: Duration::from_secs(raw.scraper.http_idle_timeout_seconds),
             http_keepalive: Duration::from_secs(raw.scraper.http_keepalive_seconds),
-            retry_count: raw.scraper.retry_count,
-            retry_total_timeout: Duration::from_secs(raw.scraper.retry_total_timeout_seconds),
-            retry_base_delay: Duration::from_millis(raw.scraper.retry_base_delay_milliseconds),
-            retry_jitter_max: Duration::from_millis(raw.scraper.retry_jitter_max_milliseconds),
+            backoff: BackoffConfig {
+                retry_count: raw.scraper.retry_count,
+                total_timeout: Duration::from_secs(raw.scraper.retry_total_timeout_seconds),
+                base_delay: Duration::from_millis(raw.scraper.retry_base_delay_milliseconds),
+                jitter_max: Duration::from_millis(raw.scraper.retry_jitter_max_milliseconds),
+            },
         },
     })
 }
@@ -497,10 +504,10 @@ mod tests {
 
                 let config = load_config(root.path()).unwrap();
 
-                assert_eq!(config.scraper.retry_count, 4);
-                assert_eq!(config.scraper.retry_total_timeout.as_secs(), 128);
-                assert_eq!(config.scraper.retry_base_delay.as_millis(), 500);
-                assert_eq!(config.scraper.retry_jitter_max.as_millis(), 1000);
+                assert_eq!(config.scraper.backoff.retry_count, 4);
+                assert_eq!(config.scraper.backoff.total_timeout.as_secs(), 128);
+                assert_eq!(config.scraper.backoff.base_delay.as_millis(), 500);
+                assert_eq!(config.scraper.backoff.jitter_max.as_millis(), 1000);
             })
         });
     }

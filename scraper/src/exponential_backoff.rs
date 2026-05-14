@@ -5,6 +5,8 @@ use futures::future::select;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 
+use app_config::BackoffConfig;
+
 use crate::get_elapsed_time;
 
 pub enum BackoffMessage<T> {
@@ -17,14 +19,6 @@ pub enum BackoffError {
     MaxRetries,
     Exit,
     Timeout,
-}
-
-#[derive(Debug, Clone)]
-pub struct BackoffConfig {
-    pub retry_count: u32,
-    pub total_timeout: Duration,
-    pub base_delay: Duration,
-    pub jitter_max: Duration,
 }
 
 pub async fn exponential_backoff<T, F, Fut>(

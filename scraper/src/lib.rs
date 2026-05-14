@@ -4,7 +4,7 @@ pub mod isins;
 pub mod metrics;
 pub mod shares;
 
-use app_config::ScraperConfig;
+use app_config::{BackoffConfig, ScraperConfig};
 use chrono::{NaiveTime, Utc};
 use errors::{ScraperResult, ScrapingError};
 use html_scraper::Html;
@@ -12,7 +12,7 @@ use reqwest::Client;
 use std::{sync::Arc, time::Duration};
 use tracing::{debug, debug_span, error, Instrument};
 
-use crate::exponential_backoff::{exponential_backoff, BackoffConfig, BackoffMessage};
+use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
 use crate::isins::types::ShareIsin;
 use crate::shares::property_selector::PropertySelector;
 use crate::shares::{ScrapableStruct, Share};
@@ -50,12 +50,7 @@ impl ScraperRuntime {
 
         Ok(Self {
             client,
-            backoff_config: BackoffConfig {
-                retry_count: config.retry_count,
-                total_timeout: config.retry_total_timeout,
-                base_delay: config.retry_base_delay,
-                jitter_max: config.retry_jitter_max,
-            },
+            backoff_config: config.backoff.clone(),
             parse_pool: Arc::new(parse_pool),
             share_concurrency: config.share_concurrency,
             share_timeout: config.share_timeout,
