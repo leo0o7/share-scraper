@@ -16,22 +16,43 @@ use crate::exponential_backoff::{exponential_backoff, BackoffMessage};
 
 static CLIENT: Lazy<Client> = Lazy::new(|| {
     reqwest::Client::builder()
-        .pool_max_idle_per_host(100) // Keep more connections alive
+        .pool_max_idle_per_host(200) // keep more connections alive
         .tcp_nodelay(true)
         .pool_idle_timeout(Duration::from_secs(15))
         .tcp_keepalive(Duration::from_secs(30))
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
         .build()
         .unwrap()
 });
 
+const USER_AGENTS: &[&str] = &[
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0",
+];
+
 pub async fn get_page_text(url: String) -> ScraperResult<String> {
     let url = url.as_str();
     let page_response = exponential_backoff(|| async {
-        match CLIENT.get(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+        let ua = USER_AGENTS[rand::random_range(0..USER_AGENTS.len())];
+        match CLIENT
+            .get(url)
+            .header("User-Agent", ua)
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            )
             .header("Accept-Language", "en-US,en;q=0.5")
-            .send().await {
+            .header(
+                "Referer",
+                "https://www.borsaitaliana.it/borsa/azioni/listino-a-z.html",
+            )
+            .header("Connection", "keep-alive")
+            .header("Cache-Control", "no-cache")
+            .send()
+            .await
+        {
             Ok(res) => match res.status() {
                 reqwest::StatusCode::OK => {
                     debug!("Returning text for url {url}");
