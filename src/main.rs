@@ -1,9 +1,17 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::IsTerminal;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use app_config::{load_config, AppConfig, LoggingConfig};
-use scraper_utils::{run_scrape_and_insert, run_scrape_and_insert_isins, run_share_refresh};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use scraper_utils::{
+    progress::{ProgressEvent, ProgressPhase, ProgressSender, ScrapeErrorCategory},
+    run_scrape_and_insert, run_scrape_and_insert_isins, run_scrape_and_insert_with_progress,
+    run_share_refresh,
+};
+use tokio::sync::mpsc;
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -55,7 +63,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     init_logging(&config.logging, logging_mode)?;
 
-    run_operation(options.operation, &config).await;
+    run_operation(
+        options.operation,
+        &config,
+        options.output_mode == OutputMode::Progress && !logging_mode.stdout,
+    )
+    .await;
 
     Ok(())
 }
@@ -105,12 +118,22 @@ fn decide_logging_mode(output_mode: OutputMode, stdout_is_terminal: bool) -> Log
     }
 }
 
-async fn run_operation(operation: ScraperOperation, config: &AppConfig) {
+async fn run_operation(operation: ScraperOperation, config: &AppConfig, render_progress: bool) {
     info!(?operation, "Starting scraper operation");
 
     match operation {
         ScraperOperation::ScrapeAndInsertShares => {
-            let result = run_scrape_and_insert(config).await;
+            let result = if render_progress {
+                let (sender, receiver) = mpsc::channel(256);
+                let renderer = tokio::spawn(render_progress_events(receiver));
+                let result =
+                    run_scrape_and_insert_with_progress(config, Some(ProgressSender::new(sender)))
+                        .await;
+                let _ = renderer.await;
+                result
+            } else {
+                run_scrape_and_insert(config).await
+            };
             info!(?result, "Finished scraper operation");
         }
         ScraperOperation::ScrapeAndInsertIsins => {
@@ -122,6 +145,195 @@ async fn run_operation(operation: ScraperOperation, config: &AppConfig) {
             info!(?result, "Finished scraper operation");
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct PhaseProgress {
+    total: Option<u64>,
+    completed: u64,
+    successful: u64,
+    errors: u64,
+    network_errors: u64,
+    invalid_pages: u64,
+    timeouts: u64,
+    max_retries: u64,
+    parsing_errors: u64,
+    last: Option<String>,
+    finished: bool,
+}
+
+#[derive(Debug, Default)]
+struct ProgressState {
+    phases: HashMap<ProgressPhase, PhaseProgress>,
+}
+
+impl ProgressState {
+    fn apply(&mut self, event: &ProgressEvent) {
+        match event {
+            ProgressEvent::PhaseStarted { phase, total } => {
+                self.phases.insert(
+                    *phase,
+                    PhaseProgress {
+                        total: *total,
+                        ..PhaseProgress::default()
+                    },
+                );
+            }
+            ProgressEvent::PhaseFinished { phase } => {
+                self.phases.entry(*phase).or_default().finished = true;
+            }
+            ProgressEvent::ShareScraped { isin, result } => {
+                let phase = self.phases.entry(ProgressPhase::ScrapeShares).or_default();
+                phase.completed += 1;
+                phase.last = Some(isin.clone());
+                match result {
+                    Ok(()) => phase.successful += 1,
+                    Err(category) => {
+                        phase.errors += 1;
+                        match category {
+                            ScrapeErrorCategory::NetworkError => phase.network_errors += 1,
+                            ScrapeErrorCategory::InvalidPage => phase.invalid_pages += 1,
+                            ScrapeErrorCategory::Timeout => phase.timeouts += 1,
+                            ScrapeErrorCategory::MaxRetries => phase.max_retries += 1,
+                            ScrapeErrorCategory::ParsingError => phase.parsing_errors += 1,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn phase(&self, phase: ProgressPhase) -> Option<&PhaseProgress> {
+        self.phases.get(&phase)
+    }
+}
+
+struct ProgressRenderer {
+    multi: MultiProgress,
+    bars: HashMap<ProgressPhase, ProgressBar>,
+}
+
+impl ProgressRenderer {
+    fn new() -> Self {
+        Self {
+            multi: MultiProgress::new(),
+            bars: HashMap::new(),
+        }
+    }
+
+    fn apply(&mut self, state: &ProgressState, event: &ProgressEvent) {
+        match event {
+            ProgressEvent::PhaseStarted { phase, total } => self.start_phase(*phase, *total),
+            ProgressEvent::PhaseFinished { phase } => self.finish_phase(state, *phase),
+            ProgressEvent::ShareScraped { .. } => {
+                self.update_phase(state, ProgressPhase::ScrapeShares)
+            }
+        }
+    }
+
+    fn start_phase(&mut self, phase: ProgressPhase, total: Option<u64>) {
+        let bar = match total {
+            Some(total) => {
+                let bar = self.multi.add(ProgressBar::new(total));
+                bar.set_style(progress_bar_style());
+                bar
+            }
+            None => {
+                let bar = self.multi.add(ProgressBar::new_spinner());
+                bar.set_style(spinner_style());
+                bar.enable_steady_tick(Duration::from_millis(100));
+                bar
+            }
+        };
+        bar.set_message(phase_label(phase).to_string());
+        self.bars.insert(phase, bar);
+    }
+
+    fn update_phase(&mut self, state: &ProgressState, phase: ProgressPhase) {
+        let Some(bar) = self.bars.get(&phase) else {
+            return;
+        };
+        let Some(phase_state) = state.phase(phase) else {
+            return;
+        };
+        bar.set_position(phase_state.completed);
+        bar.set_message(phase_message(phase, phase_state));
+    }
+
+    fn finish_phase(&mut self, state: &ProgressState, phase: ProgressPhase) {
+        self.update_phase(state, phase);
+        if let Some(bar) = self.bars.get(&phase) {
+            bar.finish_with_message(finished_phase_message(phase, state.phase(phase)));
+        }
+    }
+}
+
+async fn render_progress_events(mut receiver: mpsc::Receiver<ProgressEvent>) {
+    let mut state = ProgressState::default();
+    let mut renderer = ProgressRenderer::new();
+
+    while let Some(event) = receiver.recv().await {
+        state.apply(&event);
+        renderer.apply(&state, &event);
+    }
+}
+
+fn progress_bar_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{spinner:.green} {msg} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len}",
+    )
+    .unwrap()
+    .progress_chars("=> ")
+}
+
+fn spinner_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner:.green} {msg} [{elapsed_precise}]").unwrap()
+}
+
+fn phase_label(phase: ProgressPhase) -> &'static str {
+    match phase {
+        ProgressPhase::LoadShareIsins => "loading share ISINs",
+        ProgressPhase::ScrapeShares => "scraping shares",
+    }
+}
+
+fn phase_message(phase: ProgressPhase, state: &PhaseProgress) -> String {
+    match phase {
+        ProgressPhase::LoadShareIsins => phase_label(phase).to_string(),
+        ProgressPhase::ScrapeShares => format!(
+            "scraping shares ok={} errors={} [{}] last={}",
+            state.successful,
+            state.errors,
+            scrape_error_summary(state),
+            state.last.as_deref().unwrap_or("-")
+        ),
+    }
+}
+
+fn finished_phase_message(phase: ProgressPhase, state: Option<&PhaseProgress>) -> String {
+    match (phase, state) {
+        (ProgressPhase::LoadShareIsins, _) => "loaded share ISINs".to_string(),
+        (ProgressPhase::ScrapeShares, Some(state)) => format!(
+            "scraped shares completed={} ok={} errors={} [{}] last={}",
+            state.completed,
+            state.successful,
+            state.errors,
+            scrape_error_summary(state),
+            state.last.as_deref().unwrap_or("-")
+        ),
+        (ProgressPhase::ScrapeShares, None) => "scraped shares".to_string(),
+    }
+}
+
+fn scrape_error_summary(state: &PhaseProgress) -> String {
+    format!(
+        "network={} invalid={} timeout={} max_retries={} parsing={}",
+        state.network_errors,
+        state.invalid_pages,
+        state.timeouts,
+        state.max_retries,
+        state.parsing_errors
+    )
 }
 
 fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<CliOptions, CliError> {
@@ -203,7 +415,8 @@ fn operation_help() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_logging_mode, parse_cli, CliOptions, LoggingMode, OutputMode, ScraperOperation,
+        decide_logging_mode, parse_cli, CliOptions, LoggingMode, OutputMode, PhaseProgress,
+        ProgressEvent, ProgressPhase, ProgressState, ScrapeErrorCategory, ScraperOperation,
     };
 
     #[test]
@@ -311,6 +524,68 @@ mod tests {
                 stdout: true,
                 fallback_notice: true,
             }
+        );
+    }
+
+    #[test]
+    fn share_scrape_progress_counts_successes_failures_and_last_completed_share() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::ScrapeShares,
+            total: Some(3),
+        });
+        state.apply(&ProgressEvent::ShareScraped {
+            isin: "IT0000000001".to_string(),
+            result: Ok(()),
+        });
+        state.apply(&ProgressEvent::ShareScraped {
+            isin: "IT0000000002".to_string(),
+            result: Err(ScrapeErrorCategory::Timeout),
+        });
+        state.apply(&ProgressEvent::ShareScraped {
+            isin: "IT0000000003".to_string(),
+            result: Err(ScrapeErrorCategory::ParsingError),
+        });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::ScrapeShares,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::ScrapeShares),
+            Some(&PhaseProgress {
+                total: Some(3),
+                completed: 3,
+                successful: 1,
+                errors: 2,
+                timeouts: 1,
+                parsing_errors: 1,
+                last: Some("IT0000000003".to_string()),
+                finished: true,
+                ..PhaseProgress::default()
+            })
+        );
+    }
+
+    #[test]
+    fn loading_isins_progress_supports_unknown_total_spinner_state() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::LoadShareIsins,
+            total: None,
+        });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::LoadShareIsins,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::LoadShareIsins),
+            Some(&PhaseProgress {
+                total: None,
+                finished: true,
+                ..PhaseProgress::default()
+            })
         );
     }
 }

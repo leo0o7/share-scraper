@@ -2,7 +2,7 @@ use crate::exponential_backoff::BackoffError;
 
 pub type ScraperResult<T> = std::result::Result<T, ScrapingError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScrapingError {
     NetworkError,
     InvalidPage,
