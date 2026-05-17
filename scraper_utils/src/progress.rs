@@ -1,3 +1,4 @@
+use db::shares::ShareInsertCompletion;
 use scraper::{errors::ScrapingError, shares::ShareScrapeCompletion};
 use tokio::sync::mpsc;
 
@@ -5,6 +6,7 @@ use tokio::sync::mpsc;
 pub enum ProgressPhase {
     LoadShareIsins,
     ScrapeShares,
+    InsertShares,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,6 +30,10 @@ pub enum ProgressEvent {
     ShareScraped {
         isin: String,
         result: Result<(), ScrapeErrorCategory>,
+    },
+    ShareInserted {
+        isin: String,
+        successful: bool,
     },
 }
 
@@ -60,6 +66,13 @@ impl ProgressSender {
         let _ = self.sender.try_send(ProgressEvent::ShareScraped {
             isin: completion.isin,
             result,
+        });
+    }
+
+    pub fn share_inserted(&self, completion: ShareInsertCompletion) {
+        let _ = self.sender.try_send(ProgressEvent::ShareInserted {
+            isin: completion.isin,
+            successful: completion.successful,
         });
     }
 }

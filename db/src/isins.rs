@@ -43,6 +43,7 @@ pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) -> I
     InsertionMetrics {
         total: isin_num,
         successful: successful_inserts,
+        failed: isin_num - successful_inserts,
     }
 }
 

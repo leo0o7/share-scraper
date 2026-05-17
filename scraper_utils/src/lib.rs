@@ -3,7 +3,7 @@ use chrono::{NaiveTime, Utc};
 use db::{
     isins::{insert_all_isins, query_all_isins},
     metrics::InsertionMetrics,
-    shares::{get_shares_to_refresh, insert_all_shares},
+    shares::{get_shares_to_refresh, insert_all_shares, insert_all_shares_with_progress},
 };
 use scraper::{
     get_elapsed_time, isins::scrape_all_isins, metrics::ScrapingMetrics, shares::scrape_all_shares,
@@ -139,7 +139,24 @@ pub async fn scrape_and_insert_all_shares(
     if let Some(progress) = &progress {
         progress.phase_finished(ProgressPhase::ScrapeShares).await;
     }
-    let insertion_metrics = insert_all_shares(shares.unmetric(), &pool).await;
+    let scraped_shares = shares.unmetric();
+    if let Some(progress) = &progress {
+        progress
+            .phase_started(
+                ProgressPhase::InsertShares,
+                Some(scraped_shares.len() as u64),
+            )
+            .await;
+    }
+    let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
+        if let Some(progress) = &progress {
+            progress.share_inserted(event);
+        }
+    })
+    .await;
+    if let Some(progress) = &progress {
+        progress.phase_finished(ProgressPhase::InsertShares).await;
+    }
 
     ScrapeAndInsertMetrics {
         scrape: shares.metrics,

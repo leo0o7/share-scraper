@@ -4,4 +4,5 @@ use serde::Serialize;
 pub struct InsertionMetrics {
     pub total: i32,
     pub successful: i32,
+    pub failed: i32,
 }

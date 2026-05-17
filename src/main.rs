@@ -63,12 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     init_logging(&config.logging, logging_mode)?;
 
-    run_operation(
+    let operation_succeeded = run_operation(
         options.operation,
         &config,
         options.output_mode == OutputMode::Progress && !logging_mode.stdout,
     )
     .await;
+
+    if !operation_succeeded {
+        std::process::exit(1);
+    }
 
     Ok(())
 }
@@ -118,7 +122,11 @@ fn decide_logging_mode(output_mode: OutputMode, stdout_is_terminal: bool) -> Log
     }
 }
 
-async fn run_operation(operation: ScraperOperation, config: &AppConfig, render_progress: bool) {
+async fn run_operation(
+    operation: ScraperOperation,
+    config: &AppConfig,
+    render_progress: bool,
+) -> bool {
     info!(?operation, "Starting scraper operation");
 
     match operation {
@@ -135,16 +143,23 @@ async fn run_operation(operation: ScraperOperation, config: &AppConfig, render_p
                 run_scrape_and_insert(config).await
             };
             info!(?result, "Finished scraper operation");
+            insertion_succeeded(&result.metrics.insert)
         }
         ScraperOperation::ScrapeAndInsertIsins => {
             let result = run_scrape_and_insert_isins(config).await;
             info!(?result, "Finished scraper operation");
+            insertion_succeeded(&result.metrics.insert)
         }
         ScraperOperation::RefreshShares => {
             let result = run_share_refresh(config).await;
             info!(?result, "Finished scraper operation");
+            insertion_succeeded(&result.metrics.insert)
         }
     }
+}
+
+fn insertion_succeeded(metrics: &db::metrics::InsertionMetrics) -> bool {
+    metrics.failed == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -200,6 +215,16 @@ impl ProgressState {
                     }
                 }
             }
+            ProgressEvent::ShareInserted { isin, successful } => {
+                let phase = self.phases.entry(ProgressPhase::InsertShares).or_default();
+                phase.completed += 1;
+                phase.last = Some(isin.clone());
+                if *successful {
+                    phase.successful += 1;
+                } else {
+                    phase.errors += 1;
+                }
+            }
         }
     }
 
@@ -227,6 +252,9 @@ impl ProgressRenderer {
             ProgressEvent::PhaseFinished { phase } => self.finish_phase(state, *phase),
             ProgressEvent::ShareScraped { .. } => {
                 self.update_phase(state, ProgressPhase::ScrapeShares)
+            }
+            ProgressEvent::ShareInserted { .. } => {
+                self.update_phase(state, ProgressPhase::InsertShares)
             }
         }
     }
@@ -294,6 +322,7 @@ fn phase_label(phase: ProgressPhase) -> &'static str {
     match phase {
         ProgressPhase::LoadShareIsins => "loading share ISINs",
         ProgressPhase::ScrapeShares => "scraping shares",
+        ProgressPhase::InsertShares => "inserting shares",
     }
 }
 
@@ -305,6 +334,12 @@ fn phase_message(phase: ProgressPhase, state: &PhaseProgress) -> String {
             state.successful,
             state.errors,
             scrape_error_summary(state),
+            state.last.as_deref().unwrap_or("-")
+        ),
+        ProgressPhase::InsertShares => format!(
+            "inserting shares ok={} errors={} last={}",
+            state.successful,
+            state.errors,
             state.last.as_deref().unwrap_or("-")
         ),
     }
@@ -322,6 +357,14 @@ fn finished_phase_message(phase: ProgressPhase, state: Option<&PhaseProgress>) -
             state.last.as_deref().unwrap_or("-")
         ),
         (ProgressPhase::ScrapeShares, None) => "scraped shares".to_string(),
+        (ProgressPhase::InsertShares, Some(state)) => format!(
+            "inserted shares completed={} ok={} errors={} last={}",
+            state.completed,
+            state.successful,
+            state.errors,
+            state.last.as_deref().unwrap_or("-")
+        ),
+        (ProgressPhase::InsertShares, None) => "inserted shares".to_string(),
     }
 }
 
@@ -418,6 +461,7 @@ mod tests {
         decide_logging_mode, parse_cli, CliOptions, LoggingMode, OutputMode, PhaseProgress,
         ProgressEvent, ProgressPhase, ProgressState, ScrapeErrorCategory, ScraperOperation,
     };
+    use db::metrics::InsertionMetrics;
 
     #[test]
     fn missing_operation_uses_default_share_scrape() {
@@ -587,5 +631,57 @@ mod tests {
                 ..PhaseProgress::default()
             })
         );
+    }
+
+    #[test]
+    fn share_insert_progress_counts_successes_failures_and_last_completed_share() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::InsertShares,
+            total: Some(3),
+        });
+        state.apply(&ProgressEvent::ShareInserted {
+            isin: "IT0000000001".to_string(),
+            successful: true,
+        });
+        state.apply(&ProgressEvent::ShareInserted {
+            isin: "IT0000000002".to_string(),
+            successful: false,
+        });
+        state.apply(&ProgressEvent::ShareInserted {
+            isin: "IT0000000003".to_string(),
+            successful: true,
+        });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::InsertShares,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::InsertShares),
+            Some(&PhaseProgress {
+                total: Some(3),
+                completed: 3,
+                successful: 2,
+                errors: 1,
+                last: Some("IT0000000003".to_string()),
+                finished: true,
+                ..PhaseProgress::default()
+            })
+        );
+    }
+
+    #[test]
+    fn insertion_status_fails_when_any_insert_fails() {
+        assert!(super::insertion_succeeded(&InsertionMetrics {
+            total: 2,
+            successful: 2,
+            failed: 0,
+        }));
+        assert!(!super::insertion_succeeded(&InsertionMetrics {
+            total: 2,
+            successful: 1,
+            failed: 1,
+        }));
     }
 }
