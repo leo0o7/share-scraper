@@ -3,11 +3,10 @@ use chrono::{NaiveTime, Utc};
 use db::{
     isins::{insert_all_isins, query_all_isins},
     metrics::InsertionMetrics,
-    shares::{get_shares_to_refresh, insert_all_shares, insert_all_shares_with_progress},
+    shares::{get_shares_to_refresh, insert_all_shares_with_progress},
 };
 use scraper::{
-    get_elapsed_time, isins::scrape_all_isins, metrics::ScrapingMetrics, shares::scrape_all_shares,
-    ScraperRuntime,
+    get_elapsed_time, isins::scrape_all_isins, metrics::ScrapingMetrics, ScraperRuntime,
 };
 use tracing::{info, info_span, instrument, Instrument};
 
@@ -59,6 +58,13 @@ pub async fn run_scrape_and_insert_with_progress(
 }
 
 pub async fn run_share_refresh(config: &AppConfig) -> ScrapeAndInsertInfo {
+    run_share_refresh_with_progress(config, None).await
+}
+
+pub async fn run_share_refresh_with_progress(
+    config: &AppConfig,
+    progress: Option<ProgressSender>,
+) -> ScrapeAndInsertInfo {
     let runtime = ScraperRuntime::new(&config.scraper)
         .expect("validated scraper configuration should build HTTP client");
     run_timed(|| async move {
@@ -66,6 +72,7 @@ pub async fn run_share_refresh(config: &AppConfig) -> ScrapeAndInsertInfo {
             &config.database,
             &runtime,
             chrono_share_refresh_age(&config.scraper),
+            progress,
         )
         .await
     })
@@ -88,16 +95,56 @@ pub async fn refresh_shares(
     database_config: &DatabaseConfig,
     runtime: &ScraperRuntime,
     before: chrono::Duration,
+    progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertMetrics {
     info!("Refreshing all shares not updated in {:?}", before);
 
     let pool = db::connect(database_config).await.unwrap();
+    if let Some(progress) = &progress {
+        progress
+            .phase_started(ProgressPhase::LoadStaleShares, None)
+            .await;
+    }
     let share_isins = get_shares_to_refresh(&pool, before)
         .await
         .expect("Failed to query shares to scrape");
+    if let Some(progress) = &progress {
+        progress
+            .phase_finished(ProgressPhase::LoadStaleShares)
+            .await;
+        progress
+            .phase_started(ProgressPhase::ScrapeShares, Some(share_isins.len() as u64))
+            .await;
+    }
 
-    let mut shares = scrape_all_shares(runtime, share_isins).await;
-    let insertion_metrics = insert_all_shares(shares.unmetric(), &pool).await;
+    let mut shares =
+        scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
+            if let Some(progress) = &progress {
+                progress.share_scraped(event);
+            }
+        })
+        .await;
+    if let Some(progress) = &progress {
+        progress.phase_finished(ProgressPhase::ScrapeShares).await;
+    }
+    let scraped_shares = shares.unmetric();
+    if let Some(progress) = &progress {
+        progress
+            .phase_started(
+                ProgressPhase::InsertShares,
+                Some(scraped_shares.len() as u64),
+            )
+            .await;
+    }
+    let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
+        if let Some(progress) = &progress {
+            progress.share_inserted(event);
+        }
+    })
+    .await;
+    if let Some(progress) = &progress {
+        progress.phase_finished(ProgressPhase::InsertShares).await;
+    }
 
     ScrapeAndInsertMetrics {
         scrape: shares.metrics,

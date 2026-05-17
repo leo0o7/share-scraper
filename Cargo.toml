@@ -14,3 +14,7 @@ indicatif = "0.18.0"
 tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[dev-dependencies]
+chrono = "0.4.39"
+scraper = { path = "scraper" }

@@ -9,7 +9,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use scraper_utils::{
     progress::{ProgressEvent, ProgressPhase, ProgressSender, ScrapeErrorCategory},
     run_scrape_and_insert, run_scrape_and_insert_isins, run_scrape_and_insert_with_progress,
-    run_share_refresh,
+    run_share_refresh, run_share_refresh_with_progress, ScrapeAndInsertInfo,
 };
 use tokio::sync::mpsc;
 use tracing::info;
@@ -151,7 +151,18 @@ async fn run_operation(
             insertion_succeeded(&result.metrics.insert)
         }
         ScraperOperation::RefreshShares => {
-            let result = run_share_refresh(config).await;
+            let result = if render_progress {
+                let (sender, receiver) = mpsc::channel(256);
+                let renderer = tokio::spawn(render_progress_events(receiver));
+                let result =
+                    run_share_refresh_with_progress(config, Some(ProgressSender::new(sender)))
+                        .await;
+                let _ = renderer.await;
+                println!("{}", refresh_summary(&result));
+                result
+            } else {
+                run_share_refresh(config).await
+            };
             info!(?result, "Finished scraper operation");
             insertion_succeeded(&result.metrics.insert)
         }
@@ -160,6 +171,28 @@ async fn run_operation(
 
 fn insertion_succeeded(metrics: &db::metrics::InsertionMetrics) -> bool {
     metrics.failed == 0
+}
+
+fn refresh_summary(result: &ScrapeAndInsertInfo) -> String {
+    let scrape_errors = result.metrics.scrape.total - result.metrics.scrape.successful;
+    let insert_errors = result.metrics.insert.failed;
+    let error_suffix = if scrape_errors > 0 || insert_errors > 0 {
+        "; errors occurred, inspect logs for details"
+    } else {
+        ""
+    };
+
+    format!(
+        "Refresh summary: scraped total={} ok={} errors={}; inserted total={} ok={} errors={}; duration={}ms{}",
+        result.metrics.scrape.total,
+        result.metrics.scrape.successful,
+        scrape_errors,
+        result.metrics.insert.total,
+        result.metrics.insert.successful,
+        insert_errors,
+        result.duration_millis,
+        error_suffix
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -321,6 +354,7 @@ fn spinner_style() -> ProgressStyle {
 fn phase_label(phase: ProgressPhase) -> &'static str {
     match phase {
         ProgressPhase::LoadShareIsins => "loading share ISINs",
+        ProgressPhase::LoadStaleShares => "loading stale shares",
         ProgressPhase::ScrapeShares => "scraping shares",
         ProgressPhase::InsertShares => "inserting shares",
     }
@@ -328,7 +362,9 @@ fn phase_label(phase: ProgressPhase) -> &'static str {
 
 fn phase_message(phase: ProgressPhase, state: &PhaseProgress) -> String {
     match phase {
-        ProgressPhase::LoadShareIsins => phase_label(phase).to_string(),
+        ProgressPhase::LoadShareIsins | ProgressPhase::LoadStaleShares => {
+            phase_label(phase).to_string()
+        }
         ProgressPhase::ScrapeShares => format!(
             "scraping shares ok={} errors={} [{}] last={}",
             state.successful,
@@ -348,6 +384,7 @@ fn phase_message(phase: ProgressPhase, state: &PhaseProgress) -> String {
 fn finished_phase_message(phase: ProgressPhase, state: Option<&PhaseProgress>) -> String {
     match (phase, state) {
         (ProgressPhase::LoadShareIsins, _) => "loaded share ISINs".to_string(),
+        (ProgressPhase::LoadStaleShares, _) => "loaded stale shares".to_string(),
         (ProgressPhase::ScrapeShares, Some(state)) => format!(
             "scraped shares completed={} ok={} errors={} [{}] last={}",
             state.completed,
@@ -458,10 +495,13 @@ fn operation_help() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_logging_mode, parse_cli, CliOptions, LoggingMode, OutputMode, PhaseProgress,
-        ProgressEvent, ProgressPhase, ProgressState, ScrapeErrorCategory, ScraperOperation,
+        decide_logging_mode, parse_cli, refresh_summary, CliOptions, LoggingMode, OutputMode,
+        PhaseProgress, ProgressEvent, ProgressPhase, ProgressState, ScrapeErrorCategory,
+        ScraperOperation,
     };
     use db::metrics::InsertionMetrics;
+    use scraper::metrics::{ScrapingErrorMetrics, ScrapingMetrics};
+    use scraper_utils::{ScrapeAndInsertInfo, ScrapeAndInsertMetrics};
 
     #[test]
     fn missing_operation_uses_default_share_scrape() {
@@ -631,6 +671,59 @@ mod tests {
                 ..PhaseProgress::default()
             })
         );
+    }
+
+    #[test]
+    fn stale_share_loading_progress_supports_unknown_total_spinner_state() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::LoadStaleShares,
+            total: None,
+        });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::LoadStaleShares,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::LoadStaleShares),
+            Some(&PhaseProgress {
+                total: None,
+                finished: true,
+                ..PhaseProgress::default()
+            })
+        );
+    }
+
+    #[test]
+    fn refresh_summary_uses_authoritative_metrics_and_mentions_errors() {
+        let summary = refresh_summary(&ScrapeAndInsertInfo {
+            metrics: ScrapeAndInsertMetrics {
+                scrape: ScrapingMetrics {
+                    total: 3,
+                    successful: 2,
+                    errors: ScrapingErrorMetrics {
+                        network_error: 1,
+                        invalid_page: 0,
+                        timeout: 0,
+                        max_retries: 0,
+                        parsing_error: 0,
+                    },
+                },
+                insert: InsertionMetrics {
+                    total: 2,
+                    successful: 1,
+                    failed: 1,
+                },
+            },
+            start_time: chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            duration_millis: 42,
+        });
+
+        assert!(summary.contains("Refresh summary"));
+        assert!(summary.contains("scraped total=3 ok=2 errors=1"));
+        assert!(summary.contains("inserted total=2 ok=1 errors=1"));
+        assert!(summary.contains("errors occurred"));
     }
 
     #[test]

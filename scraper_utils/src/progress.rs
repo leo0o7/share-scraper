@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProgressPhase {
     LoadShareIsins,
+    LoadStaleShares,
     ScrapeShares,
     InsertShares,
 }
