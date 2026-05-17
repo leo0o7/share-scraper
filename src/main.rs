@@ -40,6 +40,12 @@ struct LoggingMode {
     fallback_notice: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeOutputMode {
+    logging: LoggingMode,
+    render_progress: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CliError(String);
 
@@ -55,20 +61,20 @@ impl std::error::Error for CliError {}
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(env!("CARGO_MANIFEST_DIR"))?;
     let options = parse_cli(std::env::args().skip(1))?;
-    let logging_mode = decide_logging_mode(options.output_mode, std::io::stdout().is_terminal());
+    let runtime_output = decide_runtime_output(
+        options.output_mode,
+        std::io::stdout().is_terminal(),
+        progress_renderer_can_initialize(),
+    );
 
-    if logging_mode.fallback_notice {
-        println!("progress output requested but stdout is not interactive; falling back to logs");
+    if runtime_output.logging.fallback_notice {
+        println!("progress output unavailable; falling back to logs");
     }
 
-    init_logging(&config.logging, logging_mode)?;
+    init_logging(&config.logging, runtime_output.logging)?;
 
-    let operation_succeeded = run_operation(
-        options.operation,
-        &config,
-        options.output_mode == OutputMode::Progress && !logging_mode.stdout,
-    )
-    .await;
+    let operation_succeeded =
+        run_operation(options.operation, &config, runtime_output.render_progress).await;
 
     if !operation_succeeded {
         std::process::exit(1);
@@ -105,19 +111,36 @@ fn init_logging(
     Ok(())
 }
 
-fn decide_logging_mode(output_mode: OutputMode, stdout_is_terminal: bool) -> LoggingMode {
-    match (output_mode, stdout_is_terminal) {
-        (OutputMode::Progress, true) => LoggingMode {
-            stdout: false,
-            fallback_notice: false,
+fn progress_renderer_can_initialize() -> bool {
+    true
+}
+
+fn decide_runtime_output(
+    output_mode: OutputMode,
+    stdout_is_terminal: bool,
+    progress_renderer_available: bool,
+) -> RuntimeOutputMode {
+    match (output_mode, stdout_is_terminal, progress_renderer_available) {
+        (OutputMode::Progress, true, true) => RuntimeOutputMode {
+            logging: LoggingMode {
+                stdout: false,
+                fallback_notice: false,
+            },
+            render_progress: true,
         },
-        (OutputMode::Progress, false) => LoggingMode {
-            stdout: true,
-            fallback_notice: true,
+        (OutputMode::Progress, _, _) => RuntimeOutputMode {
+            logging: LoggingMode {
+                stdout: true,
+                fallback_notice: true,
+            },
+            render_progress: false,
         },
-        (OutputMode::Logs, _) => LoggingMode {
-            stdout: true,
-            fallback_notice: false,
+        (OutputMode::Logs, _, _) => RuntimeOutputMode {
+            logging: LoggingMode {
+                stdout: true,
+                fallback_notice: false,
+            },
+            render_progress: false,
         },
     }
 }
@@ -142,8 +165,11 @@ async fn run_operation(
             } else {
                 run_scrape_and_insert(config).await
             };
+            if render_progress {
+                println!("{}", share_summary(&result));
+            }
             info!(?result, "Finished scraper operation");
-            insertion_succeeded(&result.metrics.insert)
+            operation_succeeded(&result.metrics)
         }
         ScraperOperation::ScrapeAndInsertIsins => {
             let result = if render_progress {
@@ -161,7 +187,7 @@ async fn run_operation(
                 run_scrape_and_insert_isins(config).await
             };
             info!(?result, "Finished scraper operation");
-            insertion_succeeded(&result.metrics.insert)
+            operation_succeeded(&result.metrics)
         }
         ScraperOperation::RefreshShares => {
             let result = if render_progress {
@@ -177,13 +203,17 @@ async fn run_operation(
                 run_share_refresh(config).await
             };
             info!(?result, "Finished scraper operation");
-            insertion_succeeded(&result.metrics.insert)
+            operation_succeeded(&result.metrics)
         }
     }
 }
 
-fn insertion_succeeded(metrics: &db::metrics::InsertionMetrics) -> bool {
-    metrics.failed == 0
+fn operation_succeeded(metrics: &scraper_utils::ScrapeAndInsertMetrics) -> bool {
+    metrics.scrape.total == metrics.scrape.successful && metrics.insert.failed == 0
+}
+
+fn share_summary(result: &ScrapeAndInsertInfo) -> String {
+    operation_summary("Share", result)
 }
 
 fn refresh_summary(result: &ScrapeAndInsertInfo) -> String {
@@ -602,13 +632,18 @@ fn operation_help() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_logging_mode, isin_summary, parse_cli, refresh_summary, CliOptions, LoggingMode,
-        OutputMode, PhaseProgress, ProgressEvent, ProgressPhase, ProgressState,
-        ScrapeErrorCategory, ScraperOperation,
+        decide_runtime_output, isin_summary, operation_succeeded, parse_cli, refresh_summary,
+        share_summary, CliOptions, LoggingMode, OutputMode, PhaseProgress, ProgressEvent,
+        ProgressPhase, ProgressState, RuntimeOutputMode, ScrapeErrorCategory, ScraperOperation,
     };
     use db::metrics::InsertionMetrics;
+    use db::{isins::IsinInsertCompletion, shares::ShareInsertCompletion};
     use scraper::metrics::{ScrapingErrorMetrics, ScrapingMetrics};
+    use scraper::{
+        errors::ScrapingError, isins::IsinScrapeCompletion, shares::ShareScrapeCompletion,
+    };
     use scraper_utils::{ScrapeAndInsertInfo, ScrapeAndInsertMetrics};
+    use tokio::sync::mpsc;
 
     #[test]
     fn missing_operation_uses_default_share_scrape() {
@@ -694,26 +729,45 @@ mod tests {
     }
 
     #[test]
-    fn logging_mode_decisions_follow_output_contract() {
+    fn runtime_output_decisions_follow_output_contract() {
         assert_eq!(
-            decide_logging_mode(OutputMode::Logs, true),
-            LoggingMode {
-                stdout: true,
-                fallback_notice: false,
+            decide_runtime_output(OutputMode::Logs, true, true),
+            RuntimeOutputMode {
+                logging: LoggingMode {
+                    stdout: true,
+                    fallback_notice: false,
+                },
+                render_progress: false,
             }
         );
         assert_eq!(
-            decide_logging_mode(OutputMode::Progress, true),
-            LoggingMode {
-                stdout: false,
-                fallback_notice: false,
+            decide_runtime_output(OutputMode::Progress, true, true),
+            RuntimeOutputMode {
+                logging: LoggingMode {
+                    stdout: false,
+                    fallback_notice: false,
+                },
+                render_progress: true,
             }
         );
         assert_eq!(
-            decide_logging_mode(OutputMode::Progress, false),
-            LoggingMode {
-                stdout: true,
-                fallback_notice: true,
+            decide_runtime_output(OutputMode::Progress, false, true),
+            RuntimeOutputMode {
+                logging: LoggingMode {
+                    stdout: true,
+                    fallback_notice: true,
+                },
+                render_progress: false,
+            }
+        );
+        assert_eq!(
+            decide_runtime_output(OutputMode::Progress, true, false),
+            RuntimeOutputMode {
+                logging: LoggingMode {
+                    stdout: true,
+                    fallback_notice: true,
+                },
+                render_progress: false,
             }
         );
     }
@@ -830,6 +884,37 @@ mod tests {
         assert!(summary.contains("Refresh summary"));
         assert!(summary.contains("scraped total=3 ok=2 errors=1"));
         assert!(summary.contains("inserted total=2 ok=1 errors=1"));
+        assert!(summary.contains("errors occurred"));
+    }
+
+    #[test]
+    fn share_summary_uses_authoritative_metrics_and_mentions_errors() {
+        let summary = share_summary(&ScrapeAndInsertInfo {
+            metrics: ScrapeAndInsertMetrics {
+                scrape: ScrapingMetrics {
+                    total: 3,
+                    successful: 2,
+                    errors: ScrapingErrorMetrics {
+                        network_error: 1,
+                        invalid_page: 0,
+                        timeout: 0,
+                        max_retries: 0,
+                        parsing_error: 0,
+                    },
+                },
+                insert: InsertionMetrics {
+                    total: 2,
+                    successful: 2,
+                    failed: 0,
+                },
+            },
+            start_time: chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            duration_millis: 42,
+        });
+
+        assert!(summary.contains("Share summary"));
+        assert!(summary.contains("scraped total=3 ok=2 errors=1"));
+        assert!(summary.contains("inserted total=2 ok=2 errors=0"));
         assert!(summary.contains("errors occurred"));
     }
 
@@ -982,16 +1067,80 @@ mod tests {
     }
 
     #[test]
-    fn insertion_status_fails_when_any_insert_fails() {
-        assert!(super::insertion_succeeded(&InsertionMetrics {
-            total: 2,
-            successful: 2,
-            failed: 0,
+    fn operation_status_succeeds_only_when_scrape_and_insert_are_fully_successful() {
+        assert!(operation_succeeded(&ScrapeAndInsertMetrics {
+            scrape: ScrapingMetrics {
+                total: 2,
+                successful: 2,
+                errors: ScrapingErrorMetrics::empty(),
+            },
+            insert: InsertionMetrics {
+                total: 2,
+                successful: 2,
+                failed: 0,
+            },
         }));
-        assert!(!super::insertion_succeeded(&InsertionMetrics {
-            total: 2,
-            successful: 1,
-            failed: 1,
+        assert!(!operation_succeeded(&ScrapeAndInsertMetrics {
+            scrape: ScrapingMetrics {
+                total: 2,
+                successful: 1,
+                errors: ScrapingErrorMetrics {
+                    network_error: 1,
+                    invalid_page: 0,
+                    timeout: 0,
+                    max_retries: 0,
+                    parsing_error: 0,
+                },
+            },
+            insert: InsertionMetrics {
+                total: 1,
+                successful: 1,
+                failed: 0,
+            },
         }));
+        assert!(!operation_succeeded(&ScrapeAndInsertMetrics {
+            scrape: ScrapingMetrics {
+                total: 2,
+                successful: 2,
+                errors: ScrapingErrorMetrics::empty(),
+            },
+            insert: InsertionMetrics {
+                total: 2,
+                successful: 1,
+                failed: 1,
+            },
+        }));
+    }
+
+    #[tokio::test]
+    async fn progress_sender_tolerates_closed_channels_for_lifecycle_and_updates() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let progress = super::ProgressSender::new(sender);
+
+        progress
+            .phase_started(ProgressPhase::ScrapeShares, Some(1))
+            .await;
+        progress.phase_finished(ProgressPhase::ScrapeShares).await;
+        progress.share_scraped(ShareScrapeCompletion {
+            isin: "IT0000000001".to_string(),
+            result: Err(ScrapingError::Timeout),
+        });
+        progress.share_inserted(ShareInsertCompletion {
+            isin: "IT0000000001".to_string(),
+            successful: false,
+        });
+        progress.isin_page_scraped(IsinScrapeCompletion {
+            letter: 'A',
+            page: 1,
+            isins_found: 0,
+            result: Ok(()),
+            parsing_errors: 0,
+        });
+        progress.isin_letter_completed('A');
+        progress.isin_inserted(IsinInsertCompletion {
+            isin: "IT0000000001".to_string(),
+            successful: true,
+        });
     }
 }
