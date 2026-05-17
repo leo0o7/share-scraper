@@ -100,6 +100,7 @@ impl ScraperRuntime {
                     }
                     reqwest::StatusCode::TOO_MANY_REQUESTS
                     // The target site uses these statuses when request pressure is too high.
+                    | reqwest::StatusCode::FORBIDDEN
                     | reqwest::StatusCode::BAD_GATEWAY
                     | reqwest::StatusCode::SERVICE_UNAVAILABLE
                     | reqwest::StatusCode::GATEWAY_TIMEOUT
