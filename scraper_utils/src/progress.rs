@@ -1,5 +1,5 @@
-use db::shares::ShareInsertCompletion;
-use scraper::{errors::ScrapingError, shares::ShareScrapeCompletion};
+use db::{isins::IsinInsertCompletion, shares::ShareInsertCompletion};
+use scraper::{errors::ScrapingError, isins::IsinScrapeCompletion, shares::ShareScrapeCompletion};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -8,6 +8,8 @@ pub enum ProgressPhase {
     LoadStaleShares,
     ScrapeShares,
     InsertShares,
+    ScrapeIsins,
+    InsertIsins,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +35,20 @@ pub enum ProgressEvent {
         result: Result<(), ScrapeErrorCategory>,
     },
     ShareInserted {
+        isin: String,
+        successful: bool,
+    },
+    IsinPageScraped {
+        letter: char,
+        page: u8,
+        isins_found: u64,
+        result: Result<(), ScrapeErrorCategory>,
+        parsing_errors: u64,
+    },
+    IsinLetterCompleted {
+        letter: char,
+    },
+    IsinInserted {
         isin: String,
         successful: bool,
     },
@@ -72,6 +88,30 @@ impl ProgressSender {
 
     pub fn share_inserted(&self, completion: ShareInsertCompletion) {
         let _ = self.sender.try_send(ProgressEvent::ShareInserted {
+            isin: completion.isin,
+            successful: completion.successful,
+        });
+    }
+
+    pub fn isin_page_scraped(&self, completion: IsinScrapeCompletion) {
+        let result = completion.result.map_err(ScrapeErrorCategory::from);
+        let _ = self.sender.try_send(ProgressEvent::IsinPageScraped {
+            letter: completion.letter,
+            page: completion.page,
+            isins_found: completion.isins_found,
+            result,
+            parsing_errors: completion.parsing_errors,
+        });
+    }
+
+    pub fn isin_letter_completed(&self, letter: char) {
+        let _ = self
+            .sender
+            .try_send(ProgressEvent::IsinLetterCompleted { letter });
+    }
+
+    pub fn isin_inserted(&self, completion: IsinInsertCompletion) {
+        let _ = self.sender.try_send(ProgressEvent::IsinInserted {
             isin: completion.isin,
             successful: completion.successful,
         });

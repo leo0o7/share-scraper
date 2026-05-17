@@ -1,13 +1,11 @@
 use app_config::{AppConfig, DatabaseConfig, ScraperConfig};
 use chrono::{NaiveTime, Utc};
 use db::{
-    isins::{insert_all_isins, query_all_isins},
+    isins::{insert_all_isins_with_progress, query_all_isins},
     metrics::InsertionMetrics,
     shares::{get_shares_to_refresh, insert_all_shares_with_progress},
 };
-use scraper::{
-    get_elapsed_time, isins::scrape_all_isins, metrics::ScrapingMetrics, ScraperRuntime,
-};
+use scraper::{get_elapsed_time, metrics::ScrapingMetrics, ScraperRuntime};
 use tracing::{info, info_span, instrument, Instrument};
 
 pub mod progress;
@@ -80,9 +78,16 @@ pub async fn run_share_refresh_with_progress(
 }
 
 pub async fn run_scrape_and_insert_isins(config: &AppConfig) -> ScrapeAndInsertInfo {
+    run_scrape_and_insert_isins_with_progress(config, None).await
+}
+
+pub async fn run_scrape_and_insert_isins_with_progress(
+    config: &AppConfig,
+    progress: Option<ProgressSender>,
+) -> ScrapeAndInsertInfo {
     let runtime = ScraperRuntime::new(&config.scraper)
         .expect("validated scraper configuration should build HTTP client");
-    run_timed(|| scrape_and_insert_all_isins(&config.database, &runtime)).await
+    run_timed(|| scrape_and_insert_all_isins(&config.database, &runtime, progress)).await
 }
 
 fn chrono_share_refresh_age(config: &ScraperConfig) -> chrono::Duration {
@@ -215,14 +220,49 @@ pub async fn scrape_and_insert_all_shares(
 pub async fn scrape_and_insert_all_isins(
     database_config: &DatabaseConfig,
     runtime: &ScraperRuntime,
+    progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertMetrics {
     info!("Started scraping and inserting all isins");
 
-    let mut isins = scrape_all_isins(runtime).await;
+    if let Some(progress) = &progress {
+        progress
+            .phase_started(ProgressPhase::ScrapeIsins, None)
+            .await;
+    }
+    let mut isins = scraper::isins::scrape_all_isins_with_progress(
+        runtime,
+        |event| {
+            if let Some(progress) = &progress {
+                progress.isin_page_scraped(event);
+            }
+        },
+        |letter| {
+            if let Some(progress) = &progress {
+                progress.isin_letter_completed(letter);
+            }
+        },
+    )
+    .await;
+    if let Some(progress) = &progress {
+        progress.phase_finished(ProgressPhase::ScrapeIsins).await;
+    }
+    let scraped_isins = isins.unmetric().into_iter().collect::<Vec<_>>();
     let pool = db::connect(database_config).await.unwrap();
-    let insertion_metrics = insert_all_isins(isins.unmetric().into_iter().collect(), &pool)
-        .instrument(info_span!("insert_all_isins"))
-        .await;
+    if let Some(progress) = &progress {
+        progress
+            .phase_started(ProgressPhase::InsertIsins, Some(scraped_isins.len() as u64))
+            .await;
+    }
+    let insertion_metrics = insert_all_isins_with_progress(scraped_isins, &pool, |event| {
+        if let Some(progress) = &progress {
+            progress.isin_inserted(event);
+        }
+    })
+    .instrument(info_span!("insert_all_isins"))
+    .await;
+    if let Some(progress) = &progress {
+        progress.phase_finished(ProgressPhase::InsertIsins).await;
+    }
 
     ScrapeAndInsertMetrics {
         scrape: isins.metrics,

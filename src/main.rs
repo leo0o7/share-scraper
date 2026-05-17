@@ -146,7 +146,20 @@ async fn run_operation(
             insertion_succeeded(&result.metrics.insert)
         }
         ScraperOperation::ScrapeAndInsertIsins => {
-            let result = run_scrape_and_insert_isins(config).await;
+            let result = if render_progress {
+                let (sender, receiver) = mpsc::channel(256);
+                let renderer = tokio::spawn(render_progress_events(receiver));
+                let result = scraper_utils::run_scrape_and_insert_isins_with_progress(
+                    config,
+                    Some(ProgressSender::new(sender)),
+                )
+                .await;
+                let _ = renderer.await;
+                println!("{}", isin_summary(&result));
+                result
+            } else {
+                run_scrape_and_insert_isins(config).await
+            };
             info!(?result, "Finished scraper operation");
             insertion_succeeded(&result.metrics.insert)
         }
@@ -174,6 +187,14 @@ fn insertion_succeeded(metrics: &db::metrics::InsertionMetrics) -> bool {
 }
 
 fn refresh_summary(result: &ScrapeAndInsertInfo) -> String {
+    operation_summary("Refresh", result)
+}
+
+fn isin_summary(result: &ScrapeAndInsertInfo) -> String {
+    operation_summary("ISIN", result)
+}
+
+fn operation_summary(label: &str, result: &ScrapeAndInsertInfo) -> String {
     let scrape_errors = result.metrics.scrape.total - result.metrics.scrape.successful;
     let insert_errors = result.metrics.insert.failed;
     let error_suffix = if scrape_errors > 0 || insert_errors > 0 {
@@ -183,7 +204,7 @@ fn refresh_summary(result: &ScrapeAndInsertInfo) -> String {
     };
 
     format!(
-        "Refresh summary: scraped total={} ok={} errors={}; inserted total={} ok={} errors={}; duration={}ms{}",
+        "{label} summary: scraped total={} ok={} errors={}; inserted total={} ok={} errors={}; duration={}ms{}",
         result.metrics.scrape.total,
         result.metrics.scrape.successful,
         scrape_errors,
@@ -206,6 +227,8 @@ struct PhaseProgress {
     timeouts: u64,
     max_retries: u64,
     parsing_errors: u64,
+    isins_found: u64,
+    letters_completed: u64,
     last: Option<String>,
     finished: bool,
 }
@@ -258,6 +281,47 @@ impl ProgressState {
                     phase.errors += 1;
                 }
             }
+            ProgressEvent::IsinPageScraped {
+                letter,
+                page,
+                isins_found,
+                result,
+                parsing_errors,
+            } => {
+                let phase = self.phases.entry(ProgressPhase::ScrapeIsins).or_default();
+                phase.completed += 1;
+                phase.isins_found += isins_found;
+                phase.parsing_errors += parsing_errors;
+                phase.errors += parsing_errors;
+                phase.last = Some(format!("{letter} page {page}"));
+                match result {
+                    Ok(()) => phase.successful += isins_found,
+                    Err(category) => {
+                        phase.errors += 1;
+                        match category {
+                            ScrapeErrorCategory::NetworkError => phase.network_errors += 1,
+                            ScrapeErrorCategory::InvalidPage => phase.invalid_pages += 1,
+                            ScrapeErrorCategory::Timeout => phase.timeouts += 1,
+                            ScrapeErrorCategory::MaxRetries => phase.max_retries += 1,
+                            ScrapeErrorCategory::ParsingError => phase.parsing_errors += 1,
+                        }
+                    }
+                }
+            }
+            ProgressEvent::IsinLetterCompleted { letter: _ } => {
+                let phase = self.phases.entry(ProgressPhase::ScrapeIsins).or_default();
+                phase.letters_completed += 1;
+            }
+            ProgressEvent::IsinInserted { isin, successful } => {
+                let phase = self.phases.entry(ProgressPhase::InsertIsins).or_default();
+                phase.completed += 1;
+                phase.last = Some(isin.clone());
+                if *successful {
+                    phase.successful += 1;
+                } else {
+                    phase.errors += 1;
+                }
+            }
         }
     }
 
@@ -288,6 +352,12 @@ impl ProgressRenderer {
             }
             ProgressEvent::ShareInserted { .. } => {
                 self.update_phase(state, ProgressPhase::InsertShares)
+            }
+            ProgressEvent::IsinPageScraped { .. } | ProgressEvent::IsinLetterCompleted { .. } => {
+                self.update_phase(state, ProgressPhase::ScrapeIsins)
+            }
+            ProgressEvent::IsinInserted { .. } => {
+                self.update_phase(state, ProgressPhase::InsertIsins)
             }
         }
     }
@@ -357,6 +427,8 @@ fn phase_label(phase: ProgressPhase) -> &'static str {
         ProgressPhase::LoadStaleShares => "loading stale shares",
         ProgressPhase::ScrapeShares => "scraping shares",
         ProgressPhase::InsertShares => "inserting shares",
+        ProgressPhase::ScrapeIsins => "discovering ISINs",
+        ProgressPhase::InsertIsins => "inserting ISINs",
     }
 }
 
@@ -374,6 +446,22 @@ fn phase_message(phase: ProgressPhase, state: &PhaseProgress) -> String {
         ),
         ProgressPhase::InsertShares => format!(
             "inserting shares ok={} errors={} last={}",
+            state.successful,
+            state.errors,
+            state.last.as_deref().unwrap_or("-")
+        ),
+        ProgressPhase::ScrapeIsins => format!(
+            "discovering ISINs pages={} letters={} found={} ok={} errors={} [{}] last={}",
+            state.completed,
+            state.letters_completed,
+            state.isins_found,
+            state.successful,
+            state.errors,
+            scrape_error_summary(state),
+            state.last.as_deref().unwrap_or("-")
+        ),
+        ProgressPhase::InsertIsins => format!(
+            "inserting ISINs ok={} errors={} last={}",
             state.successful,
             state.errors,
             state.last.as_deref().unwrap_or("-")
@@ -402,6 +490,25 @@ fn finished_phase_message(phase: ProgressPhase, state: Option<&PhaseProgress>) -
             state.last.as_deref().unwrap_or("-")
         ),
         (ProgressPhase::InsertShares, None) => "inserted shares".to_string(),
+        (ProgressPhase::ScrapeIsins, Some(state)) => format!(
+            "discovered ISINs pages={} letters={} found={} ok={} errors={} [{}] last={}",
+            state.completed,
+            state.letters_completed,
+            state.isins_found,
+            state.successful,
+            state.errors,
+            scrape_error_summary(state),
+            state.last.as_deref().unwrap_or("-")
+        ),
+        (ProgressPhase::ScrapeIsins, None) => "discovered ISINs".to_string(),
+        (ProgressPhase::InsertIsins, Some(state)) => format!(
+            "inserted ISINs completed={} ok={} errors={} last={}",
+            state.completed,
+            state.successful,
+            state.errors,
+            state.last.as_deref().unwrap_or("-")
+        ),
+        (ProgressPhase::InsertIsins, None) => "inserted ISINs".to_string(),
     }
 }
 
@@ -495,9 +602,9 @@ fn operation_help() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_logging_mode, parse_cli, refresh_summary, CliOptions, LoggingMode, OutputMode,
-        PhaseProgress, ProgressEvent, ProgressPhase, ProgressState, ScrapeErrorCategory,
-        ScraperOperation,
+        decide_logging_mode, isin_summary, parse_cli, refresh_summary, CliOptions, LoggingMode,
+        OutputMode, PhaseProgress, ProgressEvent, ProgressPhase, ProgressState,
+        ScrapeErrorCategory, ScraperOperation,
     };
     use db::metrics::InsertionMetrics;
     use scraper::metrics::{ScrapingErrorMetrics, ScrapingMetrics};
@@ -762,6 +869,116 @@ mod tests {
                 ..PhaseProgress::default()
             })
         );
+    }
+
+    #[test]
+    fn isin_discovery_progress_counts_unknown_total_pages_letters_and_errors() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::ScrapeIsins,
+            total: None,
+        });
+        state.apply(&ProgressEvent::IsinPageScraped {
+            letter: 'A',
+            page: 1,
+            isins_found: 2,
+            result: Ok(()),
+            parsing_errors: 1,
+        });
+        state.apply(&ProgressEvent::IsinPageScraped {
+            letter: 'B',
+            page: 1,
+            isins_found: 0,
+            result: Err(ScrapeErrorCategory::NetworkError),
+            parsing_errors: 0,
+        });
+        state.apply(&ProgressEvent::IsinLetterCompleted { letter: 'A' });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::ScrapeIsins,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::ScrapeIsins),
+            Some(&PhaseProgress {
+                total: None,
+                completed: 2,
+                successful: 2,
+                errors: 2,
+                network_errors: 1,
+                parsing_errors: 1,
+                isins_found: 2,
+                letters_completed: 1,
+                last: Some("B page 1".to_string()),
+                finished: true,
+                ..PhaseProgress::default()
+            })
+        );
+    }
+
+    #[test]
+    fn isin_insert_progress_counts_successes_failures_and_last_completed_isin() {
+        let mut state = ProgressState::default();
+
+        state.apply(&ProgressEvent::PhaseStarted {
+            phase: ProgressPhase::InsertIsins,
+            total: Some(2),
+        });
+        state.apply(&ProgressEvent::IsinInserted {
+            isin: "IT0000000001".to_string(),
+            successful: true,
+        });
+        state.apply(&ProgressEvent::IsinInserted {
+            isin: "IT0000000002".to_string(),
+            successful: false,
+        });
+        state.apply(&ProgressEvent::PhaseFinished {
+            phase: ProgressPhase::InsertIsins,
+        });
+
+        assert_eq!(
+            state.phase(ProgressPhase::InsertIsins),
+            Some(&PhaseProgress {
+                total: Some(2),
+                completed: 2,
+                successful: 1,
+                errors: 1,
+                last: Some("IT0000000002".to_string()),
+                finished: true,
+                ..PhaseProgress::default()
+            })
+        );
+    }
+
+    #[test]
+    fn isin_summary_uses_authoritative_metrics_and_mentions_errors() {
+        let summary = isin_summary(&ScrapeAndInsertInfo {
+            metrics: ScrapeAndInsertMetrics {
+                scrape: ScrapingMetrics {
+                    total: 4,
+                    successful: 3,
+                    errors: ScrapingErrorMetrics {
+                        network_error: 0,
+                        invalid_page: 0,
+                        timeout: 0,
+                        max_retries: 0,
+                        parsing_error: 1,
+                    },
+                },
+                insert: InsertionMetrics {
+                    total: 3,
+                    successful: 2,
+                    failed: 1,
+                },
+            },
+            start_time: chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            duration_millis: 24,
+        });
+
+        assert!(summary.contains("ISIN summary"));
+        assert!(summary.contains("scraped total=4 ok=3 errors=1"));
+        assert!(summary.contains("inserted total=3 ok=2 errors=1"));
+        assert!(summary.contains("errors occurred"));
     }
 
     #[test]
