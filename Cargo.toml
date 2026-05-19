@@ -10,6 +10,8 @@ edition = "2021"
 app_config = { path = "app_config" }
 db = { path = "db" }
 scraper_utils = { path = "scraper_utils" }
+indicatif = { version = "0.18.4", features = ["in_memory"] }
+tabled = "0.20.0"
 tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

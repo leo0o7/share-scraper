@@ -2,7 +2,12 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+use indicatif::{HumanCount, InMemoryTerm, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use scraper_utils::progress::{ProgressEvent, ProgressPhase, ScrapeErrorCategory};
+use tabled::{
+    builder::Builder,
+    settings::{object::Columns, style::HorizontalLine, Alignment as TableAlignment, Style},
+};
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
@@ -12,6 +17,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const TARGET_WIDTH: usize = 100;
 const MAX_BAR_WIDTH: usize = 30;
 const MIN_BAR_WIDTH: usize = 12;
+const SPINNER_FRAMES: [&str; 11] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
 
 const SHARE_SCRAPE_PHASES: [ProgressPhase; 3] = [
     ProgressPhase::LoadShareIsins,
@@ -296,7 +302,7 @@ impl PhaseStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Alignment {
     Left,
     Right,
@@ -553,12 +559,8 @@ fn render_spinner_loader(
     elapsed: &str,
     operation_elapsed: Duration,
 ) -> String {
-    loader_line(
-        label,
-        spinner_frame(operation_elapsed),
-        elapsed,
-        progress.last.as_deref(),
-    )
+    let spinner = spinner_frame(operation_elapsed);
+    loader_line(label, &spinner, elapsed, progress.last.as_deref())
 }
 
 fn loader_line(label: &str, indicator: &str, metrics: &str, last: Option<&str>) -> String {
@@ -576,72 +578,26 @@ fn loader_line(label: &str, indicator: &str, metrics: &str, last: Option<&str>) 
 }
 
 fn render_table(title: &str, columns: &[Column], rows: &[Vec<String>]) -> String {
-    let widths = table_widths(columns, rows);
-    let mut lines = vec![title.to_string(), table_border('┌', '┬', '┐', &widths)];
-    lines.push(table_row(
-        columns
-            .iter()
-            .map(|column| column.title.to_string())
-            .collect(),
-        columns,
-        &widths,
-    ));
-    lines.push(table_border('├', '┼', '┤', &widths));
+    let mut builder = Builder::default();
+    builder.push_record(columns.iter().map(|column| column.title));
     for row in rows {
-        lines.push(table_row(row.clone(), columns, &widths));
+        builder.push_record(row.iter().cloned());
     }
-    lines.push(table_border('└', '┴', '┘', &widths));
-    lines.join("\n")
-}
 
-fn table_widths(columns: &[Column], rows: &[Vec<String>]) -> Vec<usize> {
-    columns
-        .iter()
-        .enumerate()
-        .map(|(index, column)| {
-            rows.iter()
-                .filter_map(|row| row.get(index))
-                .map(|value| char_count(value))
-                .max()
-                .unwrap_or(0)
-                .max(char_count(column.title))
-        })
-        .collect()
-}
+    let mut table = builder.build();
+    table.with(
+        Style::modern()
+            .remove_horizontal()
+            .horizontals([(1, HorizontalLine::inherit(Style::modern()))]),
+    );
 
-fn table_border(left: char, join: char, right: char, widths: &[usize]) -> String {
-    let mut line = String::new();
-    line.push(left);
-    for (index, width) in widths.iter().enumerate() {
-        line.push_str(&"─".repeat(width + 2));
-        line.push(if index + 1 == widths.len() {
-            right
-        } else {
-            join
-        });
+    for (index, column) in columns.iter().enumerate() {
+        if column.alignment == Alignment::Right {
+            table.modify(Columns::one(index), TableAlignment::right());
+        }
     }
-    line
-}
 
-fn table_row(values: Vec<String>, columns: &[Column], widths: &[usize]) -> String {
-    let mut line = String::new();
-    line.push('│');
-    for (index, width) in widths.iter().enumerate() {
-        let value = values.get(index).map_or("", String::as_str);
-        line.push(' ');
-        line.push_str(&pad_cell(value, *width, columns[index].alignment));
-        line.push(' ');
-        line.push('│');
-    }
-    line
-}
-
-fn pad_cell(value: &str, width: usize, alignment: Alignment) -> String {
-    let padding = width.saturating_sub(char_count(value));
-    match alignment {
-        Alignment::Left => format!("{value}{}", " ".repeat(padding)),
-        Alignment::Right => format!("{}{value}", " ".repeat(padding)),
-    }
+    format!("{title}\n{table}")
 }
 
 fn left_column(title: &'static str) -> Column {
@@ -752,28 +708,33 @@ fn pluralized(count: u64, singular: &'static str, plural: &'static str) -> &'sta
 }
 
 fn progress_bar(completed: u64, total: u64, width: usize) -> String {
-    if total == 0 {
-        return "░".repeat(width);
-    }
+    let length = total.max(1);
+    let position = completed.min(total);
+    let term = InMemoryTerm::new(1, width as u16);
+    let draw_target = ProgressDrawTarget::term_like(Box::new(term.clone()));
+    let template = format!("{{bar:{width}}}");
+    let bar = ProgressBar::with_draw_target(Some(length), draw_target).with_style(
+        ProgressStyle::with_template(&template)
+            .expect("progress bar template should be valid")
+            .progress_chars("█░"),
+    );
+    bar.set_position(position);
+    bar.force_draw();
 
-    let completed = completed.min(total);
-    let scaled = (completed as u128) * (width as u128);
-    let filled = (scaled / (total as u128)) as usize;
-    let has_partial = !scaled.is_multiple_of(total as u128);
-    let mut bar = String::new();
-    bar.push_str(&"█".repeat(filled));
-    if has_partial && completed < total && filled < width {
-        bar.push('▌');
+    let mut rendered = term.contents();
+    if rendered.is_empty() {
+        rendered = "░".repeat(width);
     }
-    let used = char_count(&bar);
-    bar.push_str(&"░".repeat(width.saturating_sub(used)));
-    bar
+    if position > 0 && position < total && !rendered.contains('█') {
+        rendered.replace_range(.."░".len(), "▌");
+    }
+    rendered
 }
 
-fn spinner_frame(elapsed: Duration) -> &'static str {
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let index = (elapsed.as_millis() / FRAME_INTERVAL.as_millis()) as usize % FRAMES.len();
-    FRAMES[index]
+fn spinner_frame(elapsed: Duration) -> String {
+    let style = ProgressStyle::default_spinner().tick_strings(&SPINNER_FRAMES);
+    let index = (elapsed.as_millis() / FRAME_INTERVAL.as_millis()) as u64;
+    style.get_tick_str(index).to_string()
 }
 
 fn percent(completed: u64, total: u64) -> u64 {
@@ -861,15 +822,7 @@ fn insert_phase(operation: ScraperOperation) -> Option<ProgressPhase> {
 }
 
 fn format_number(value: u64) -> String {
-    let value = value.to_string();
-    let mut formatted = String::new();
-    for (index, char) in value.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            formatted.push(',');
-        }
-        formatted.push(char);
-    }
-    formatted.chars().rev().collect()
+    HumanCount(value).to_string()
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -1115,6 +1068,7 @@ mod tests {
     #[test]
     fn progress_bar_uses_unicode_without_boundaries() {
         assert_eq!(progress_bar(5, 10, 10), "█████░░░░░");
+        assert!(progress_bar(1, 1_318, 10).contains('▌'));
         assert!(!progress_bar(5, 10, 10).contains('['));
     }
 }
