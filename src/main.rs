@@ -153,7 +153,7 @@ async fn run_operation(
     match operation {
         ScraperOperation::ScrapeAndInsertShares => {
             let result = if render_progress {
-                let (sender, receiver) = mpsc::channel(256);
+                let (sender, receiver) = mpsc::unbounded_channel();
                 let renderer = tokio::spawn(progress_ui::render(
                     ScraperOperation::ScrapeAndInsertShares,
                     receiver,
@@ -171,7 +171,7 @@ async fn run_operation(
         }
         ScraperOperation::ScrapeAndInsertIsins => {
             let result = if render_progress {
-                let (sender, receiver) = mpsc::channel(256);
+                let (sender, receiver) = mpsc::unbounded_channel();
                 let renderer = tokio::spawn(progress_ui::render(
                     ScraperOperation::ScrapeAndInsertIsins,
                     receiver,
@@ -191,7 +191,7 @@ async fn run_operation(
         }
         ScraperOperation::RefreshShares => {
             let result = if render_progress {
-                let (sender, receiver) = mpsc::channel(256);
+                let (sender, receiver) = mpsc::unbounded_channel();
                 let renderer = tokio::spawn(progress_ui::render(
                     ScraperOperation::RefreshShares,
                     receiver,
@@ -480,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn progress_sender_tolerates_closed_channels_for_lifecycle_and_updates() {
-        let (sender, receiver) = mpsc::channel(1);
+        let (sender, receiver) = mpsc::unbounded_channel();
         drop(receiver);
         let progress = super::ProgressSender::new(sender);
 

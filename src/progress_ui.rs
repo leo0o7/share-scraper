@@ -31,7 +31,7 @@ const SHARE_REFRESH_PHASES: [ProgressPhase; 3] = [
 ];
 const ISIN_PHASES: [ProgressPhase; 2] = [ProgressPhase::ScrapeIsins, ProgressPhase::InsertIsins];
 
-pub async fn render(operation: ScraperOperation, receiver: mpsc::Receiver<ProgressEvent>) {
+pub async fn render(operation: ScraperOperation, receiver: mpsc::UnboundedReceiver<ProgressEvent>) {
     let mut renderer = TerminalRenderer::new(operation, io::stdout());
     let _ = renderer.run(receiver).await;
 }
@@ -51,7 +51,10 @@ impl<W: Write> TerminalRenderer<W> {
         }
     }
 
-    async fn run(&mut self, mut receiver: mpsc::Receiver<ProgressEvent>) -> io::Result<()> {
+    async fn run(
+        &mut self,
+        mut receiver: mpsc::UnboundedReceiver<ProgressEvent>,
+    ) -> io::Result<()> {
         let mut ticker = time::interval(FRAME_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
