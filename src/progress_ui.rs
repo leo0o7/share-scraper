@@ -20,20 +20,44 @@ const MIN_BAR_WIDTH: usize = 12;
 const SPINNER_FRAMES: [&str; 11] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
 
 pub async fn render(operation: ScraperOperation, receiver: mpsc::UnboundedReceiver<ProgressEvent>) {
-    let mut renderer = TerminalRenderer::new(operation, io::stdout());
-    let _ = renderer.run(receiver).await;
+    let progress = TerminalProgress::new(operation, Instant::now());
+    let mut driver = TerminalDriver::new(io::stdout());
+    let _ = driver.run(progress, receiver).await;
 }
 
-struct TerminalRenderer<W> {
+struct TerminalProgress {
     state: ProgressState,
+}
+
+impl TerminalProgress {
+    fn new(operation: ScraperOperation, now: Instant) -> Self {
+        Self {
+            state: ProgressState::new(operation, now),
+        }
+    }
+
+    fn apply(&mut self, event: &ProgressEvent, now: Instant) {
+        self.state.apply(event, now);
+    }
+
+    fn live_frame(&self, now: Instant) -> String {
+        render_live(&self.state.snapshot(now), self.state.operation.metadata())
+    }
+
+    fn final_frame(&mut self, now: Instant) -> String {
+        self.state.complete(now);
+        render_final(&self.state.snapshot(now), self.state.operation.metadata())
+    }
+}
+
+struct TerminalDriver<W> {
     writer: W,
     rendered_lines: usize,
 }
 
-impl<W: Write> TerminalRenderer<W> {
-    fn new(operation: ScraperOperation, writer: W) -> Self {
+impl<W: Write> TerminalDriver<W> {
+    fn new(writer: W) -> Self {
         Self {
-            state: ProgressState::new(operation, Instant::now()),
             writer,
             rendered_lines: 0,
         }
@@ -41,40 +65,29 @@ impl<W: Write> TerminalRenderer<W> {
 
     async fn run(
         &mut self,
+        mut progress: TerminalProgress,
         mut receiver: mpsc::UnboundedReceiver<ProgressEvent>,
     ) -> io::Result<()> {
         let mut ticker = time::interval(FRAME_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        self.redraw_live(Instant::now())?;
+        self.redraw(&progress.live_frame(Instant::now()))?;
         loop {
             tokio::select! {
                 event = receiver.recv() => {
                     let Some(event) = event else {
                         break;
                     };
-                    self.state.apply(&event, Instant::now());
-                    self.redraw_live(Instant::now())?;
+                    progress.apply(&event, Instant::now());
+                    self.redraw(&progress.live_frame(Instant::now()))?;
                 }
                 _ = ticker.tick() => {
-                    self.redraw_live(Instant::now())?;
+                    self.redraw(&progress.live_frame(Instant::now()))?;
                 }
             }
         }
 
-        let now = Instant::now();
-        self.state.complete(now);
-        self.redraw(&render_final(
-            &self.state.snapshot(now),
-            self.state.operation.metadata(),
-        ))
-    }
-
-    fn redraw_live(&mut self, now: Instant) -> io::Result<()> {
-        self.redraw(&render_live(
-            &self.state.snapshot(now),
-            self.state.operation.metadata(),
-        ))
+        self.redraw(&progress.final_frame(Instant::now()))
     }
 
     fn redraw(&mut self, output: &str) -> io::Result<()> {
@@ -86,6 +99,11 @@ impl<W: Write> TerminalRenderer<W> {
         self.writer.flush()?;
         self.rendered_lines = output.lines().count();
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn into_inner(self) -> W {
+        self.writer
     }
 }
 
@@ -663,5 +681,34 @@ mod tests {
         assert_eq!(progress_bar(5, 10, 10), "█████░░░░░");
         assert!(progress_bar(1, 1_318, 10).contains('▌'));
         assert!(!progress_bar(5, 10, 10).contains('['));
+    }
+
+    #[tokio::test]
+    async fn terminal_driver_receives_events_and_finalizes_when_channel_closes() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        sender
+            .send(ProgressEvent::PhaseStarted {
+                phase: ProgressPhase::ScrapeShares,
+                total: Some(1),
+            })
+            .unwrap();
+        sender
+            .send(ProgressEvent::ShareScraped {
+                isin: "IT0005089476".to_string(),
+                result: Ok(()),
+            })
+            .unwrap();
+        drop(sender);
+
+        let progress = TerminalProgress::new(ScraperOperation::RefreshShares, Instant::now());
+        let mut driver = TerminalDriver::new(Vec::new());
+
+        driver.run(progress, receiver).await.unwrap();
+
+        let output = String::from_utf8(driver.into_inner()).unwrap();
+        assert!(output.contains("Share refresh"));
+        assert!(output.contains("Refreshing shares"));
+        assert!(output.contains("Share refresh completed"));
+        assert!(output.contains("IT0005089476"));
     }
 }
