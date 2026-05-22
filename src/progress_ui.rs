@@ -11,25 +11,13 @@ use tabled::{
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use crate::ScraperOperation;
+use crate::operation::ScraperOperation;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const TARGET_WIDTH: usize = 100;
 const MAX_BAR_WIDTH: usize = 30;
 const MIN_BAR_WIDTH: usize = 12;
 const SPINNER_FRAMES: [&str; 11] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
-
-const SHARE_SCRAPE_PHASES: [ProgressPhase; 3] = [
-    ProgressPhase::LoadShareIsins,
-    ProgressPhase::ScrapeShares,
-    ProgressPhase::InsertShares,
-];
-const SHARE_REFRESH_PHASES: [ProgressPhase; 3] = [
-    ProgressPhase::LoadStaleShares,
-    ProgressPhase::ScrapeShares,
-    ProgressPhase::InsertShares,
-];
-const ISIN_PHASES: [ProgressPhase; 2] = [ProgressPhase::ScrapeIsins, ProgressPhase::InsertIsins];
 
 pub async fn render(operation: ScraperOperation, receiver: mpsc::UnboundedReceiver<ProgressEvent>) {
     let mut renderer = TerminalRenderer::new(operation, io::stdout());
@@ -678,36 +666,20 @@ fn failure_reason(state: &ProgressState) -> Option<String> {
         (0, save_errors) => Some(format!(
             "{} {}",
             format_number(save_errors),
-            pluralized(save_errors, "save error", "save errors")
+            state.operation.metadata().save_error_label(save_errors)
         )),
         (scrape_errors, save_errors) => Some(format!(
             "{} {}, {} {}",
             format_number(scrape_errors),
             scrape_error_label(state.operation, scrape_errors),
             format_number(save_errors),
-            pluralized(save_errors, "save error", "save errors")
+            state.operation.metadata().save_error_label(save_errors)
         )),
     }
 }
 
 fn scrape_error_label(operation: ScraperOperation, count: u64) -> &'static str {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares => {
-            pluralized(count, "scrape error", "scrape errors")
-        }
-        ScraperOperation::RefreshShares => pluralized(count, "refresh error", "refresh errors"),
-        ScraperOperation::ScrapeAndInsertIsins => {
-            pluralized(count, "discovery error", "discovery errors")
-        }
-    }
-}
-
-fn pluralized(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
-    if count == 1 {
-        singular
-    } else {
-        plural
-    }
+    operation.metadata().scrape_error_label(count)
 }
 
 fn progress_bar(completed: u64, total: u64, width: usize) -> String {
@@ -749,79 +721,31 @@ fn percent(completed: u64, total: u64) -> u64 {
 }
 
 fn operation_title(operation: ScraperOperation) -> &'static str {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares => "Share scrape",
-        ScraperOperation::ScrapeAndInsertIsins => "ISIN discovery",
-        ScraperOperation::RefreshShares => "Share refresh",
-    }
+    operation.metadata().title
 }
 
 fn phase_label(operation: ScraperOperation, phase: ProgressPhase) -> &'static str {
-    match (operation, phase) {
-        (ScraperOperation::ScrapeAndInsertShares, ProgressPhase::LoadShareIsins) => {
-            "Load share ISINs"
-        }
-        (ScraperOperation::ScrapeAndInsertShares, ProgressPhase::ScrapeShares) => "Scrape shares",
-        (ScraperOperation::RefreshShares, ProgressPhase::LoadStaleShares) => "Load stale shares",
-        (ScraperOperation::RefreshShares, ProgressPhase::ScrapeShares) => "Refresh shares",
-        (_, ProgressPhase::InsertShares) => "Save shares",
-        (_, ProgressPhase::ScrapeIsins) => "Discover ISINs",
-        (_, ProgressPhase::InsertIsins) => "Save ISINs",
-        (_, ProgressPhase::LoadShareIsins) => "Load share ISINs",
-        (_, ProgressPhase::LoadStaleShares) => "Load stale shares",
-        (_, ProgressPhase::ScrapeShares) => "Scrape shares",
-    }
+    operation.metadata().phase_label(phase)
 }
 
 fn loader_label(operation: ScraperOperation, phase: ProgressPhase) -> &'static str {
-    match (operation, phase) {
-        (ScraperOperation::ScrapeAndInsertShares, ProgressPhase::LoadShareIsins) => {
-            "Loading share ISINs"
-        }
-        (ScraperOperation::ScrapeAndInsertShares, ProgressPhase::ScrapeShares) => "Scraping shares",
-        (ScraperOperation::RefreshShares, ProgressPhase::LoadStaleShares) => "Loading stale shares",
-        (ScraperOperation::RefreshShares, ProgressPhase::ScrapeShares) => "Refreshing shares",
-        (_, ProgressPhase::InsertShares) => "Saving shares",
-        (_, ProgressPhase::ScrapeIsins) => "Discovering ISINs",
-        (_, ProgressPhase::InsertIsins) => "Saving ISINs",
-        (_, ProgressPhase::LoadShareIsins) => "Loading share ISINs",
-        (_, ProgressPhase::LoadStaleShares) => "Loading stale shares",
-        (_, ProgressPhase::ScrapeShares) => "Scraping shares",
-    }
+    operation.metadata().loader_label(phase)
 }
 
 fn expected_phases(operation: ScraperOperation) -> &'static [ProgressPhase] {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares => &SHARE_SCRAPE_PHASES,
-        ScraperOperation::RefreshShares => &SHARE_REFRESH_PHASES,
-        ScraperOperation::ScrapeAndInsertIsins => &ISIN_PHASES,
-    }
+    operation.metadata().expected_phases
 }
 
 fn load_phase_for_operation(operation: ScraperOperation) -> Option<ProgressPhase> {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares => Some(ProgressPhase::LoadShareIsins),
-        ScraperOperation::RefreshShares => Some(ProgressPhase::LoadStaleShares),
-        ScraperOperation::ScrapeAndInsertIsins => None,
-    }
+    operation.metadata().load_phase
 }
 
 fn scrape_phase(operation: ScraperOperation) -> Option<ProgressPhase> {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares | ScraperOperation::RefreshShares => {
-            Some(ProgressPhase::ScrapeShares)
-        }
-        ScraperOperation::ScrapeAndInsertIsins => Some(ProgressPhase::ScrapeIsins),
-    }
+    Some(operation.metadata().scrape_phase)
 }
 
 fn insert_phase(operation: ScraperOperation) -> Option<ProgressPhase> {
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares | ScraperOperation::RefreshShares => {
-            Some(ProgressPhase::InsertShares)
-        }
-        ScraperOperation::ScrapeAndInsertIsins => Some(ProgressPhase::InsertIsins),
-    }
+    Some(operation.metadata().insert_phase)
 }
 
 fn format_number(value: u64) -> String {

@@ -11,14 +11,10 @@ use tokio::sync::mpsc;
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod operation;
 mod progress_ui;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ScraperOperation {
-    ScrapeAndInsertShares,
-    ScrapeAndInsertIsins,
-    RefreshShares,
-}
+use crate::operation::ScraperOperation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputMode {
@@ -148,7 +144,10 @@ async fn run_operation(
     config: &AppConfig,
     render_progress: bool,
 ) -> bool {
-    info!(?operation, "Starting scraper operation");
+    info!(
+        operation = operation.metadata().cli_name,
+        "Starting scraper operation"
+    );
 
     match operation {
         ScraperOperation::ScrapeAndInsertShares => {
@@ -267,12 +266,7 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<CliOptions, CliEr
 }
 
 fn parse_operation_name(operation: &str) -> ScraperOperation {
-    match operation {
-        "scrape-shares" => ScraperOperation::ScrapeAndInsertShares,
-        "scrape-isins" => ScraperOperation::ScrapeAndInsertIsins,
-        "refresh-shares" => ScraperOperation::RefreshShares,
-        _ => unreachable!("operation names are filtered by parse_cli"),
-    }
+    ScraperOperation::from_cli_name(operation).expect("operation names are filtered by parse_cli")
 }
 
 fn parse_output_mode(value: &str) -> Result<OutputMode, CliError> {
