@@ -13,6 +13,7 @@ use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod operation;
+mod progress_state;
 mod progress_ui;
 
 use crate::operation::ScraperOperation;
