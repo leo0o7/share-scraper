@@ -10,7 +10,10 @@ use tracing::{info, info_span, instrument, Instrument};
 
 pub mod progress;
 
-use progress::{ProgressPhase, ProgressSender};
+use progress::{
+    IsinInsertProgress, IsinPageScrapeProgress, ProgressPhase, ProgressSender, ScrapeErrorCategory,
+    ShareInsertProgress, ShareScrapeProgress,
+};
 
 #[derive(Debug)]
 pub struct ScrapeAndInsertInfo {
@@ -95,6 +98,51 @@ fn chrono_share_refresh_age(config: &ScraperConfig) -> chrono::Duration {
         .expect("validated scraper refresh age should fit chrono duration")
 }
 
+fn scrape_error_category(error: scraper::errors::ScrapingError) -> ScrapeErrorCategory {
+    match error {
+        scraper::errors::ScrapingError::NetworkError => ScrapeErrorCategory::NetworkError,
+        scraper::errors::ScrapingError::InvalidPage => ScrapeErrorCategory::InvalidPage,
+        scraper::errors::ScrapingError::Timeout => ScrapeErrorCategory::Timeout,
+        scraper::errors::ScrapingError::MaxRetries => ScrapeErrorCategory::MaxRetries,
+        scraper::errors::ScrapingError::ParsingErr => ScrapeErrorCategory::ParsingError,
+    }
+}
+
+fn share_scrape_progress(
+    completion: scraper::shares::ShareScrapeCompletion,
+) -> ShareScrapeProgress {
+    ShareScrapeProgress {
+        isin: completion.isin,
+        result: completion.result.map_err(scrape_error_category),
+    }
+}
+
+fn isin_page_scrape_progress(
+    completion: scraper::isins::IsinScrapeCompletion,
+) -> IsinPageScrapeProgress {
+    IsinPageScrapeProgress {
+        letter: completion.letter,
+        page: completion.page,
+        isins_found: completion.isins_found,
+        result: completion.result.map_err(scrape_error_category),
+        parsing_errors: completion.parsing_errors,
+    }
+}
+
+fn share_insert_progress(completion: db::shares::ShareInsertCompletion) -> ShareInsertProgress {
+    ShareInsertProgress {
+        isin: completion.isin,
+        successful: completion.successful,
+    }
+}
+
+fn isin_insert_progress(completion: db::isins::IsinInsertCompletion) -> IsinInsertProgress {
+    IsinInsertProgress {
+        isin: completion.isin,
+        successful: completion.successful,
+    }
+}
+
 #[instrument(skip_all)]
 pub async fn refresh_shares(
     database_config: &DatabaseConfig,
@@ -125,7 +173,7 @@ pub async fn refresh_shares(
     let mut shares =
         scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
             if let Some(progress) = &progress {
-                progress.share_scraped(event);
+                progress.share_scraped(share_scrape_progress(event));
             }
         })
         .await;
@@ -143,7 +191,7 @@ pub async fn refresh_shares(
     }
     let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
         if let Some(progress) = &progress {
-            progress.share_inserted(event);
+            progress.share_inserted(share_insert_progress(event));
         }
     })
     .await;
@@ -184,7 +232,7 @@ pub async fn scrape_and_insert_all_shares(
     let mut shares =
         scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
             if let Some(progress) = &progress {
-                progress.share_scraped(event);
+                progress.share_scraped(share_scrape_progress(event));
             }
         })
         .await;
@@ -202,7 +250,7 @@ pub async fn scrape_and_insert_all_shares(
     }
     let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
         if let Some(progress) = &progress {
-            progress.share_inserted(event);
+            progress.share_inserted(share_insert_progress(event));
         }
     })
     .await;
@@ -233,7 +281,7 @@ pub async fn scrape_and_insert_all_isins(
         runtime,
         |event| {
             if let Some(progress) = &progress {
-                progress.isin_page_scraped(event);
+                progress.isin_page_scraped(isin_page_scrape_progress(event));
             }
         },
         |letter| {
@@ -255,7 +303,7 @@ pub async fn scrape_and_insert_all_isins(
     }
     let insertion_metrics = insert_all_isins_with_progress(scraped_isins, &pool, |event| {
         if let Some(progress) = &progress {
-            progress.isin_inserted(event);
+            progress.isin_inserted(isin_insert_progress(event));
         }
     })
     .instrument(info_span!("insert_all_isins"))

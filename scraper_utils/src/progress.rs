@@ -1,5 +1,3 @@
-use db::{isins::IsinInsertCompletion, shares::ShareInsertCompletion};
-use scraper::{errors::ScrapingError, isins::IsinScrapeCompletion, shares::ShareScrapeCompletion};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,6 +52,33 @@ pub enum ProgressEvent {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareScrapeProgress {
+    pub isin: String,
+    pub result: Result<(), ScrapeErrorCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareInsertProgress {
+    pub isin: String,
+    pub successful: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IsinPageScrapeProgress {
+    pub letter: char,
+    pub page: u8,
+    pub isins_found: u64,
+    pub result: Result<(), ScrapeErrorCategory>,
+    pub parsing_errors: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IsinInsertProgress {
+    pub isin: String,
+    pub successful: bool,
+}
+
 #[derive(Clone)]
 pub struct ProgressSender {
     sender: mpsc::UnboundedSender<ProgressEvent>,
@@ -74,28 +99,26 @@ impl ProgressSender {
         let _ = self.sender.send(ProgressEvent::PhaseFinished { phase });
     }
 
-    pub fn share_scraped(&self, completion: ShareScrapeCompletion) {
-        let result = completion.result.map_err(ScrapeErrorCategory::from);
+    pub fn share_scraped(&self, completion: ShareScrapeProgress) {
         let _ = self.sender.send(ProgressEvent::ShareScraped {
             isin: completion.isin,
-            result,
+            result: completion.result,
         });
     }
 
-    pub fn share_inserted(&self, completion: ShareInsertCompletion) {
+    pub fn share_inserted(&self, completion: ShareInsertProgress) {
         let _ = self.sender.send(ProgressEvent::ShareInserted {
             isin: completion.isin,
             successful: completion.successful,
         });
     }
 
-    pub fn isin_page_scraped(&self, completion: IsinScrapeCompletion) {
-        let result = completion.result.map_err(ScrapeErrorCategory::from);
+    pub fn isin_page_scraped(&self, completion: IsinPageScrapeProgress) {
         let _ = self.sender.send(ProgressEvent::IsinPageScraped {
             letter: completion.letter,
             page: completion.page,
             isins_found: completion.isins_found,
-            result,
+            result: completion.result,
             parsing_errors: completion.parsing_errors,
         });
     }
@@ -106,23 +129,11 @@ impl ProgressSender {
             .send(ProgressEvent::IsinLetterCompleted { letter });
     }
 
-    pub fn isin_inserted(&self, completion: IsinInsertCompletion) {
+    pub fn isin_inserted(&self, completion: IsinInsertProgress) {
         let _ = self.sender.send(ProgressEvent::IsinInserted {
             isin: completion.isin,
             successful: completion.successful,
         });
-    }
-}
-
-impl From<ScrapingError> for ScrapeErrorCategory {
-    fn from(value: ScrapingError) -> Self {
-        match value {
-            ScrapingError::NetworkError => ScrapeErrorCategory::NetworkError,
-            ScrapingError::InvalidPage => ScrapeErrorCategory::InvalidPage,
-            ScrapingError::Timeout => ScrapeErrorCategory::Timeout,
-            ScrapingError::MaxRetries => ScrapeErrorCategory::MaxRetries,
-            ScrapingError::ParsingErr => ScrapeErrorCategory::ParsingError,
-        }
     }
 }
 
@@ -136,9 +147,9 @@ mod tests {
         let progress = ProgressSender::new(sender);
 
         for index in 0..1_000 {
-            progress.share_scraped(ShareScrapeCompletion {
+            progress.share_scraped(ShareScrapeProgress {
                 isin: format!("IT{index:010}"),
-                result: Err(ScrapingError::Timeout),
+                result: Err(ScrapeErrorCategory::Timeout),
             });
         }
         drop(progress);
@@ -149,5 +160,37 @@ mod tests {
         }
 
         assert_eq!(received, 1_000);
+    }
+
+    #[tokio::test]
+    async fn progress_sender_tolerates_closed_channels_for_lifecycle_and_updates() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        let progress = ProgressSender::new(sender);
+
+        progress
+            .phase_started(ProgressPhase::ScrapeShares, Some(1))
+            .await;
+        progress.phase_finished(ProgressPhase::ScrapeShares).await;
+        progress.share_scraped(ShareScrapeProgress {
+            isin: "IT0000000001".to_string(),
+            result: Err(ScrapeErrorCategory::Timeout),
+        });
+        progress.share_inserted(ShareInsertProgress {
+            isin: "IT0000000001".to_string(),
+            successful: false,
+        });
+        progress.isin_page_scraped(IsinPageScrapeProgress {
+            letter: 'A',
+            page: 1,
+            isins_found: 0,
+            result: Ok(()),
+            parsing_errors: 0,
+        });
+        progress.isin_letter_completed('A');
+        progress.isin_inserted(IsinInsertProgress {
+            isin: "IT0000000001".to_string(),
+            successful: true,
+        });
     }
 }

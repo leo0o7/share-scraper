@@ -291,13 +291,8 @@ mod tests {
         RuntimeOutputMode, ScraperOperation,
     };
     use db::metrics::InsertionMetrics;
-    use db::{isins::IsinInsertCompletion, shares::ShareInsertCompletion};
     use scraper::metrics::{ScrapingErrorMetrics, ScrapingMetrics};
-    use scraper::{
-        errors::ScrapingError, isins::IsinScrapeCompletion, shares::ShareScrapeCompletion,
-    };
-    use scraper_utils::{progress::ProgressPhase, ScrapeAndInsertMetrics};
-    use tokio::sync::mpsc;
+    use scraper_utils::ScrapeAndInsertMetrics;
 
     #[test]
     fn missing_operation_uses_default_share_scrape() {
@@ -470,37 +465,5 @@ mod tests {
                 failed: 1,
             },
         }));
-    }
-
-    #[tokio::test]
-    async fn progress_sender_tolerates_closed_channels_for_lifecycle_and_updates() {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        drop(receiver);
-        let progress = super::ProgressSender::new(sender);
-
-        progress
-            .phase_started(ProgressPhase::ScrapeShares, Some(1))
-            .await;
-        progress.phase_finished(ProgressPhase::ScrapeShares).await;
-        progress.share_scraped(ShareScrapeCompletion {
-            isin: "IT0000000001".to_string(),
-            result: Err(ScrapingError::Timeout),
-        });
-        progress.share_inserted(ShareInsertCompletion {
-            isin: "IT0000000001".to_string(),
-            successful: false,
-        });
-        progress.isin_page_scraped(IsinScrapeCompletion {
-            letter: 'A',
-            page: 1,
-            isins_found: 0,
-            result: Ok(()),
-            parsing_errors: 0,
-        });
-        progress.isin_letter_completed('A');
-        progress.isin_inserted(IsinInsertCompletion {
-            isin: "IT0000000001".to_string(),
-            successful: true,
-        });
     }
 }
