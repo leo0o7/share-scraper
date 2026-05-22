@@ -15,6 +15,63 @@ use progress::{
     ShareInsertProgress, ShareScrapeProgress,
 };
 
+struct WorkflowProgress {
+    progress: Option<ProgressSender>,
+}
+
+impl WorkflowProgress {
+    fn new(progress: Option<ProgressSender>) -> Self {
+        Self { progress }
+    }
+
+    async fn run_phase<F, T>(&self, phase: ProgressPhase, total: Option<u64>, operation: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        if let Some(progress) = &self.progress {
+            progress.phase_started(phase, total).await;
+        }
+
+        let result = operation.await;
+
+        if let Some(progress) = &self.progress {
+            progress.phase_finished(phase).await;
+        }
+
+        result
+    }
+
+    fn share_scraped(&self, completion: scraper::shares::ShareScrapeCompletion) {
+        if let Some(progress) = &self.progress {
+            progress.share_scraped(share_scrape_progress(completion));
+        }
+    }
+
+    fn share_inserted(&self, completion: db::shares::ShareInsertCompletion) {
+        if let Some(progress) = &self.progress {
+            progress.share_inserted(share_insert_progress(completion));
+        }
+    }
+
+    fn isin_page_scraped(&self, completion: scraper::isins::IsinScrapeCompletion) {
+        if let Some(progress) = &self.progress {
+            progress.isin_page_scraped(isin_page_scrape_progress(completion));
+        }
+    }
+
+    fn isin_letter_completed(&self, letter: char) {
+        if let Some(progress) = &self.progress {
+            progress.isin_letter_completed(letter);
+        }
+    }
+
+    fn isin_inserted(&self, completion: db::isins::IsinInsertCompletion) {
+        if let Some(progress) = &self.progress {
+            progress.isin_inserted(isin_insert_progress(completion));
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ScrapeAndInsertInfo {
     pub metrics: ScrapeAndInsertMetrics,
@@ -151,53 +208,36 @@ pub async fn refresh_shares(
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertMetrics {
     info!("Refreshing all shares not updated in {:?}", before);
+    let workflow_progress = WorkflowProgress::new(progress);
 
     let pool = db::connect(database_config).await.unwrap();
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(ProgressPhase::LoadStaleShares, None)
-            .await;
-    }
-    let share_isins = get_shares_to_refresh(&pool, before)
-        .await
-        .expect("Failed to query shares to scrape");
-    if let Some(progress) = &progress {
-        progress
-            .phase_finished(ProgressPhase::LoadStaleShares)
-            .await;
-        progress
-            .phase_started(ProgressPhase::ScrapeShares, Some(share_isins.len() as u64))
-            .await;
-    }
-
-    let mut shares =
-        scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
-            if let Some(progress) = &progress {
-                progress.share_scraped(share_scrape_progress(event));
-            }
+    let share_isins = workflow_progress
+        .run_phase(ProgressPhase::LoadStaleShares, None, async {
+            get_shares_to_refresh(&pool, before)
+                .await
+                .expect("Failed to query shares to scrape")
         })
         .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::ScrapeShares).await;
-    }
+
+    let mut shares = workflow_progress
+        .run_phase(
+            ProgressPhase::ScrapeShares,
+            Some(share_isins.len() as u64),
+            scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
+                workflow_progress.share_scraped(event);
+            }),
+        )
+        .await;
     let scraped_shares = shares.unmetric();
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(
-                ProgressPhase::InsertShares,
-                Some(scraped_shares.len() as u64),
-            )
-            .await;
-    }
-    let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
-        if let Some(progress) = &progress {
-            progress.share_inserted(share_insert_progress(event));
-        }
-    })
-    .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::InsertShares).await;
-    }
+    let insertion_metrics = workflow_progress
+        .run_phase(
+            ProgressPhase::InsertShares,
+            Some(scraped_shares.len() as u64),
+            insert_all_shares_with_progress(scraped_shares, &pool, |event| {
+                workflow_progress.share_inserted(event);
+            }),
+        )
+        .await;
 
     ScrapeAndInsertMetrics {
         scrape: shares.metrics,
@@ -212,51 +252,36 @@ pub async fn scrape_and_insert_all_shares(
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertMetrics {
     info!("Started scraping and inserting all shares");
+    let workflow_progress = WorkflowProgress::new(progress);
 
     let pool = db::connect(database_config).await.unwrap();
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(ProgressPhase::LoadShareIsins, None)
-            .await;
-    }
-    let share_isins = query_all_isins(&pool)
-        .await
-        .expect("Failed to query all ISINs");
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::LoadShareIsins).await;
-        progress
-            .phase_started(ProgressPhase::ScrapeShares, Some(share_isins.len() as u64))
-            .await;
-    }
-
-    let mut shares =
-        scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
-            if let Some(progress) = &progress {
-                progress.share_scraped(share_scrape_progress(event));
-            }
+    let share_isins = workflow_progress
+        .run_phase(ProgressPhase::LoadShareIsins, None, async {
+            query_all_isins(&pool)
+                .await
+                .expect("Failed to query all ISINs")
         })
         .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::ScrapeShares).await;
-    }
+
+    let mut shares = workflow_progress
+        .run_phase(
+            ProgressPhase::ScrapeShares,
+            Some(share_isins.len() as u64),
+            scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
+                workflow_progress.share_scraped(event);
+            }),
+        )
+        .await;
     let scraped_shares = shares.unmetric();
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(
-                ProgressPhase::InsertShares,
-                Some(scraped_shares.len() as u64),
-            )
-            .await;
-    }
-    let insertion_metrics = insert_all_shares_with_progress(scraped_shares, &pool, |event| {
-        if let Some(progress) = &progress {
-            progress.share_inserted(share_insert_progress(event));
-        }
-    })
-    .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::InsertShares).await;
-    }
+    let insertion_metrics = workflow_progress
+        .run_phase(
+            ProgressPhase::InsertShares,
+            Some(scraped_shares.len() as u64),
+            insert_all_shares_with_progress(scraped_shares, &pool, |event| {
+                workflow_progress.share_inserted(event);
+            }),
+        )
+        .await;
 
     ScrapeAndInsertMetrics {
         scrape: shares.metrics,
@@ -271,49 +296,83 @@ pub async fn scrape_and_insert_all_isins(
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertMetrics {
     info!("Started scraping and inserting all isins");
+    let workflow_progress = WorkflowProgress::new(progress);
 
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(ProgressPhase::ScrapeIsins, None)
-            .await;
-    }
-    let mut isins = scraper::isins::scrape_all_isins_with_progress(
-        runtime,
-        |event| {
-            if let Some(progress) = &progress {
-                progress.isin_page_scraped(isin_page_scrape_progress(event));
-            }
-        },
-        |letter| {
-            if let Some(progress) = &progress {
-                progress.isin_letter_completed(letter);
-            }
-        },
-    )
-    .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::ScrapeIsins).await;
-    }
+    let mut isins = workflow_progress
+        .run_phase(
+            ProgressPhase::ScrapeIsins,
+            None,
+            scraper::isins::scrape_all_isins_with_progress(
+                runtime,
+                |event| {
+                    workflow_progress.isin_page_scraped(event);
+                },
+                |letter| {
+                    workflow_progress.isin_letter_completed(letter);
+                },
+            ),
+        )
+        .await;
     let scraped_isins = isins.unmetric().into_iter().collect::<Vec<_>>();
     let pool = db::connect(database_config).await.unwrap();
-    if let Some(progress) = &progress {
-        progress
-            .phase_started(ProgressPhase::InsertIsins, Some(scraped_isins.len() as u64))
-            .await;
-    }
-    let insertion_metrics = insert_all_isins_with_progress(scraped_isins, &pool, |event| {
-        if let Some(progress) = &progress {
-            progress.isin_inserted(isin_insert_progress(event));
-        }
-    })
-    .instrument(info_span!("insert_all_isins"))
-    .await;
-    if let Some(progress) = &progress {
-        progress.phase_finished(ProgressPhase::InsertIsins).await;
-    }
+    let insertion_metrics = workflow_progress
+        .run_phase(
+            ProgressPhase::InsertIsins,
+            Some(scraped_isins.len() as u64),
+            insert_all_isins_with_progress(scraped_isins, &pool, |event| {
+                workflow_progress.isin_inserted(event);
+            })
+            .instrument(info_span!("insert_all_isins")),
+        )
+        .await;
 
     ScrapeAndInsertMetrics {
         scrape: isins.metrics,
         insert: insertion_metrics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use progress::ProgressEvent;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn workflow_progress_emits_phase_lifecycle_around_work() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let progress = WorkflowProgress::new(Some(ProgressSender::new(sender)));
+
+        let result = progress
+            .run_phase(ProgressPhase::ScrapeShares, Some(2), async { 7 })
+            .await;
+        drop(progress);
+
+        assert_eq!(result, 7);
+        assert_eq!(
+            receiver.recv().await,
+            Some(ProgressEvent::PhaseStarted {
+                phase: ProgressPhase::ScrapeShares,
+                total: Some(2),
+            })
+        );
+        assert_eq!(
+            receiver.recv().await,
+            Some(ProgressEvent::PhaseFinished {
+                phase: ProgressPhase::ScrapeShares,
+            })
+        );
+        assert_eq!(receiver.recv().await, None);
+    }
+
+    #[tokio::test]
+    async fn workflow_progress_runs_without_a_progress_sender() {
+        let progress = WorkflowProgress::new(None);
+
+        let result = progress
+            .run_phase(ProgressPhase::InsertShares, Some(1), async { "saved" })
+            .await;
+
+        assert_eq!(result, "saved");
     }
 }

@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::io::IsTerminal;
 use std::sync::Mutex;
 
 use app_config::{load_config, AppConfig, LoggingConfig};
 use scraper_utils::{
-    progress::ProgressSender, run_scrape_and_insert, run_scrape_and_insert_isins,
-    run_scrape_and_insert_with_progress, run_share_refresh, run_share_refresh_with_progress,
+    progress::ProgressSender, run_scrape_and_insert_isins_with_progress,
+    run_scrape_and_insert_with_progress, run_share_refresh_with_progress, ScrapeAndInsertInfo,
 };
 use tokio::sync::mpsc;
 use tracing::info;
@@ -149,63 +150,42 @@ async fn run_operation(
         "Starting scraper operation"
     );
 
-    match operation {
-        ScraperOperation::ScrapeAndInsertShares => {
-            let result = if render_progress {
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let renderer = tokio::spawn(progress_ui::render(
-                    ScraperOperation::ScrapeAndInsertShares,
-                    receiver,
-                ));
-                let result =
-                    run_scrape_and_insert_with_progress(config, Some(ProgressSender::new(sender)))
-                        .await;
-                let _ = renderer.await;
-                result
-            } else {
-                run_scrape_and_insert(config).await
-            };
-            info!(?result, "Finished scraper operation");
-            operation_succeeded(&result.metrics)
+    let result = run_operation_with_progress(operation, render_progress, |progress| async move {
+        match operation {
+            ScraperOperation::ScrapeAndInsertShares => {
+                run_scrape_and_insert_with_progress(config, progress).await
+            }
+            ScraperOperation::ScrapeAndInsertIsins => {
+                run_scrape_and_insert_isins_with_progress(config, progress).await
+            }
+            ScraperOperation::RefreshShares => {
+                run_share_refresh_with_progress(config, progress).await
+            }
         }
-        ScraperOperation::ScrapeAndInsertIsins => {
-            let result = if render_progress {
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let renderer = tokio::spawn(progress_ui::render(
-                    ScraperOperation::ScrapeAndInsertIsins,
-                    receiver,
-                ));
-                let result = scraper_utils::run_scrape_and_insert_isins_with_progress(
-                    config,
-                    Some(ProgressSender::new(sender)),
-                )
-                .await;
-                let _ = renderer.await;
-                result
-            } else {
-                run_scrape_and_insert_isins(config).await
-            };
-            info!(?result, "Finished scraper operation");
-            operation_succeeded(&result.metrics)
-        }
-        ScraperOperation::RefreshShares => {
-            let result = if render_progress {
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let renderer = tokio::spawn(progress_ui::render(
-                    ScraperOperation::RefreshShares,
-                    receiver,
-                ));
-                let result =
-                    run_share_refresh_with_progress(config, Some(ProgressSender::new(sender)))
-                        .await;
-                let _ = renderer.await;
-                result
-            } else {
-                run_share_refresh(config).await
-            };
-            info!(?result, "Finished scraper operation");
-            operation_succeeded(&result.metrics)
-        }
+    })
+    .await;
+
+    info!(?result, "Finished scraper operation");
+    operation_succeeded(&result.metrics)
+}
+
+async fn run_operation_with_progress<F, Fut>(
+    operation: ScraperOperation,
+    render_progress: bool,
+    run: F,
+) -> ScrapeAndInsertInfo
+where
+    F: FnOnce(Option<ProgressSender>) -> Fut,
+    Fut: Future<Output = ScrapeAndInsertInfo>,
+{
+    if render_progress {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let renderer = tokio::spawn(progress_ui::render(operation, receiver));
+        let result = run(Some(ProgressSender::new(sender))).await;
+        let _ = renderer.await;
+        result
+    } else {
+        run(None).await
     }
 }
 
