@@ -42,9 +42,9 @@ impl WorkflowProgress {
         result
     }
 
-    fn share_scraped(&self, completion: scraper::shares::ShareScrapeCompletion) {
+    fn share_scraped(&self, isin: String, result: scraper::errors::ScraperResult<()>) {
         if let Some(progress) = &self.progress {
-            progress.share_scraped(share_scrape_progress(completion));
+            progress.share_scraped(share_scrape_progress(isin, result));
         }
     }
 
@@ -100,6 +100,12 @@ impl scraper::isins::IsinCrawlProgress for WorkflowProgress {
 
     fn letter_completed(&self, letter: char) {
         self.isin_letter_completed(letter);
+    }
+}
+
+impl scraper::shares::ShareScrapeProgress for WorkflowProgress {
+    fn share_scraped(&self, isin: String, result: scraper::errors::ScraperResult<()>) {
+        self.share_scraped(isin, result);
     }
 }
 
@@ -197,11 +203,12 @@ fn scrape_error_category(error: scraper::errors::ScrapingError) -> ScrapeErrorCa
 }
 
 fn share_scrape_progress(
-    completion: scraper::shares::ShareScrapeCompletion,
+    isin: String,
+    result: scraper::errors::ScraperResult<()>,
 ) -> ShareScrapeProgress {
     ShareScrapeProgress {
-        isin: completion.isin,
-        result: completion.result.map_err(scrape_error_category),
+        isin,
+        result: result.map_err(scrape_error_category),
     }
 }
 
@@ -242,9 +249,11 @@ pub async fn refresh_shares(
         .run_phase(
             ProgressPhase::ScrapeShares,
             Some(share_isins.len() as u64),
-            scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
-                workflow_progress.share_scraped(event);
-            }),
+            scraper::shares::scrape_all_shares_with_progress(
+                runtime,
+                share_isins,
+                workflow_progress.clone(),
+            ),
         )
         .await;
     let scraped_shares = shares.unmetric();
@@ -286,9 +295,11 @@ pub async fn scrape_and_insert_all_shares(
         .run_phase(
             ProgressPhase::ScrapeShares,
             Some(share_isins.len() as u64),
-            scraper::shares::scrape_all_shares_with_progress(runtime, share_isins, |event| {
-                workflow_progress.share_scraped(event);
-            }),
+            scraper::shares::scrape_all_shares_with_progress(
+                runtime,
+                share_isins,
+                workflow_progress.clone(),
+            ),
         )
         .await;
     let scraped_shares = shares.unmetric();
@@ -409,6 +420,27 @@ mod tests {
         assert_eq!(
             receiver.recv().await,
             Some(ProgressEvent::IsinLetterCompleted { letter: 'A' })
+        );
+        assert_eq!(receiver.recv().await, None);
+    }
+
+    #[tokio::test]
+    async fn workflow_progress_forwards_share_scrape_updates_as_normalized_events() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let progress = WorkflowProgress::new(Some(ProgressSender::new(sender)));
+
+        progress.share_scraped(
+            "IT0000000001".to_string(),
+            Err(scraper::errors::ScrapingError::Timeout),
+        );
+        drop(progress);
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(ProgressEvent::ShareScraped {
+                isin: "IT0000000001".to_string(),
+                result: Err(ScrapeErrorCategory::Timeout),
+            })
         );
         assert_eq!(receiver.recv().await, None);
     }
