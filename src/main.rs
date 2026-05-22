@@ -3,8 +3,8 @@ use std::io::IsTerminal;
 
 use app_config::{load_config, AppConfig};
 use scraper_utils::{
-    progress::ProgressSender, run_scrape_and_insert_isins_with_progress,
-    run_scrape_and_insert_with_progress, run_share_refresh_with_progress, ScrapeAndInsertInfo,
+    progress::ProgressSender, run_scrape_and_insert, run_scrape_and_insert_isins,
+    run_share_refresh, ScrapeAndInsertInfo,
 };
 use tokio::sync::mpsc;
 use tracing::info;
@@ -59,17 +59,15 @@ async fn run_operation(
         "Starting scraper operation"
     );
 
-    let result = run_operation_with_progress(operation, render_progress, |progress| async move {
+    let result = run_operation_observing(operation, render_progress, |progress| async move {
         match operation {
             ScraperOperation::ScrapeAndInsertShares => {
-                run_scrape_and_insert_with_progress(config, progress).await
+                run_scrape_and_insert(config, progress).await
             }
             ScraperOperation::ScrapeAndInsertIsins => {
-                run_scrape_and_insert_isins_with_progress(config, progress).await
+                run_scrape_and_insert_isins(config, progress).await
             }
-            ScraperOperation::RefreshShares => {
-                run_share_refresh_with_progress(config, progress).await
-            }
+            ScraperOperation::RefreshShares => run_share_refresh(config, progress).await,
         }
     })
     .await;
@@ -78,7 +76,7 @@ async fn run_operation(
     operation_succeeded(&result.metrics)
 }
 
-async fn run_operation_with_progress<F, Fut>(
+async fn run_operation_observing<F, Fut>(
     operation: ScraperOperation,
     render_progress: bool,
     run: F,

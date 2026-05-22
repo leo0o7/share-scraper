@@ -57,7 +57,7 @@ where
             let fetch_page = self.fetch_page.clone();
             let progress = progress.clone();
             tasks.push(
-                crawl_isins_for_letter_with_fetcher(
+                crawl_isins_for_letter(
                     letter,
                     self.max_pages,
                     move |page| fetch_page(letter as u8, page),
@@ -78,10 +78,6 @@ where
     }
 }
 
-pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
-    scrape_all_isins_with_progress(runtime, NoopIsinCrawlProgress).await
-}
-
 pub trait IsinCrawlProgress: Clone {
     fn page_scraped(
         &self,
@@ -95,9 +91,11 @@ pub trait IsinCrawlProgress: Clone {
     fn letter_completed(&self, letter: char);
 }
 
+#[cfg(test)]
 #[derive(Clone)]
-pub struct NoopIsinCrawlProgress;
+struct NoopIsinCrawlProgress;
 
+#[cfg(test)]
 impl IsinCrawlProgress for NoopIsinCrawlProgress {
     fn page_scraped(
         &self,
@@ -112,7 +110,7 @@ impl IsinCrawlProgress for NoopIsinCrawlProgress {
     fn letter_completed(&self, _letter: char) {}
 }
 
-pub async fn scrape_all_isins_with_progress<P>(
+pub async fn scrape_all_isins<P>(
     runtime: &ScraperRuntime,
     progress: P,
 ) -> WithMetrics<HashSet<ShareIsin>>
@@ -128,7 +126,7 @@ where
     .await
 }
 
-async fn crawl_isins_for_letter_with_fetcher<F, Fut, P>(
+async fn crawl_isins_for_letter<F, Fut, P>(
     letter: char,
     max_pages: u8,
     mut fetch_page: F,

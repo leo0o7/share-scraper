@@ -8,10 +8,7 @@ use tracing::{info, info_span, instrument, Instrument};
 
 pub mod progress;
 
-use progress::{
-    IsinInsertProgress, ProgressPhase, ProgressSender, ScrapeErrorCategory, ShareInsertProgress,
-    ShareScrapeProgress,
-};
+use progress::{ProgressPhase, ProgressSender, ScrapeErrorCategory};
 
 #[derive(Clone)]
 struct WorkflowProgress {
@@ -42,13 +39,13 @@ impl WorkflowProgress {
 
     fn share_scraped(&self, isin: String, result: scraper::errors::ScraperResult<()>) {
         if let Some(progress) = &self.progress {
-            progress.share_scraped(share_scrape_progress(isin, result));
+            progress.share_scraped(isin, result.map_err(scrape_error_category));
         }
     }
 
     fn share_inserted(&self, isin: String, successful: bool) {
         if let Some(progress) = &self.progress {
-            progress.share_inserted(ShareInsertProgress { isin, successful });
+            progress.share_inserted(isin, successful);
         }
     }
 
@@ -61,13 +58,13 @@ impl WorkflowProgress {
         parsing_errors: u64,
     ) {
         if let Some(progress) = &self.progress {
-            progress.isin_page_scraped(progress::IsinPageScrapeProgress {
+            progress.isin_page_scraped(
                 letter,
                 page,
                 isins_found,
-                result: result.map_err(scrape_error_category),
+                result.map_err(scrape_error_category),
                 parsing_errors,
-            });
+            );
         }
     }
 
@@ -79,7 +76,7 @@ impl WorkflowProgress {
 
     fn isin_inserted(&self, isin: String, successful: bool) {
         if let Some(progress) = &self.progress {
-            progress.isin_inserted(IsinInsertProgress { isin, successful });
+            progress.isin_inserted(isin, successful);
         }
     }
 }
@@ -137,11 +134,7 @@ where
     }
 }
 
-pub async fn run_scrape_and_insert(config: &AppConfig) -> ScrapeAndInsertInfo {
-    run_scrape_and_insert_with_progress(config, None).await
-}
-
-pub async fn run_scrape_and_insert_with_progress(
+pub async fn run_scrape_and_insert(
     config: &AppConfig,
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertInfo {
@@ -150,11 +143,7 @@ pub async fn run_scrape_and_insert_with_progress(
     run_timed(|| scrape_and_insert_all_shares(&config.database, &runtime, progress)).await
 }
 
-pub async fn run_share_refresh(config: &AppConfig) -> ScrapeAndInsertInfo {
-    run_share_refresh_with_progress(config, None).await
-}
-
-pub async fn run_share_refresh_with_progress(
+pub async fn run_share_refresh(
     config: &AppConfig,
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertInfo {
@@ -172,11 +161,7 @@ pub async fn run_share_refresh_with_progress(
     .await
 }
 
-pub async fn run_scrape_and_insert_isins(config: &AppConfig) -> ScrapeAndInsertInfo {
-    run_scrape_and_insert_isins_with_progress(config, None).await
-}
-
-pub async fn run_scrape_and_insert_isins_with_progress(
+pub async fn run_scrape_and_insert_isins(
     config: &AppConfig,
     progress: Option<ProgressSender>,
 ) -> ScrapeAndInsertInfo {
@@ -200,17 +185,7 @@ fn scrape_error_category(error: scraper::errors::ScrapingError) -> ScrapeErrorCa
     }
 }
 
-fn share_scrape_progress(
-    isin: String,
-    result: scraper::errors::ScraperResult<()>,
-) -> ShareScrapeProgress {
-    ShareScrapeProgress {
-        isin,
-        result: result.map_err(scrape_error_category),
-    }
-}
-
-async fn insert_items_with_progress<T, F, Fut, E, Label, Report>(
+async fn insert_items<T, F, Fut, E, Label, Report>(
     items: Vec<T>,
     item_label: Label,
     insert: F,
@@ -269,12 +244,12 @@ where
     }
 }
 
-async fn insert_shares_with_progress(
+async fn insert_shares(
     shares: Vec<scraper::shares::Share>,
     pool: &Pool<Postgres>,
     progress: WorkflowProgress,
 ) -> InsertionMetrics {
-    insert_items_with_progress(
+    insert_items(
         shares,
         |share| share.share_id.isin.to_string(),
         |share| async { db::shares::insert_share(share, pool).await },
@@ -284,12 +259,12 @@ async fn insert_shares_with_progress(
     .await
 }
 
-async fn insert_isins_with_progress(
+async fn insert_isins(
     isins: Vec<scraper::isins::types::ShareIsin>,
     pool: &Pool<Postgres>,
     progress: WorkflowProgress,
 ) -> InsertionMetrics {
-    insert_items_with_progress(
+    insert_items(
         isins,
         |isin| isin.isin.to_string(),
         |isin| async { db::isins::insert_isin(isin, pool).await.map(|_| ()) },
@@ -322,11 +297,7 @@ pub async fn refresh_shares(
         .run_phase(
             ProgressPhase::ScrapeShares,
             Some(share_isins.len() as u64),
-            scraper::shares::scrape_all_shares_with_progress(
-                runtime,
-                share_isins,
-                workflow_progress.clone(),
-            ),
+            scraper::shares::scrape_all_shares(runtime, share_isins, workflow_progress.clone()),
         )
         .await;
     let scraped_shares = shares.unmetric();
@@ -334,7 +305,7 @@ pub async fn refresh_shares(
         .run_phase(
             ProgressPhase::InsertShares,
             Some(scraped_shares.len() as u64),
-            insert_shares_with_progress(scraped_shares, &pool, workflow_progress.clone()),
+            insert_shares(scraped_shares, &pool, workflow_progress.clone()),
         )
         .await;
 
@@ -366,11 +337,7 @@ pub async fn scrape_and_insert_all_shares(
         .run_phase(
             ProgressPhase::ScrapeShares,
             Some(share_isins.len() as u64),
-            scraper::shares::scrape_all_shares_with_progress(
-                runtime,
-                share_isins,
-                workflow_progress.clone(),
-            ),
+            scraper::shares::scrape_all_shares(runtime, share_isins, workflow_progress.clone()),
         )
         .await;
     let scraped_shares = shares.unmetric();
@@ -378,7 +345,7 @@ pub async fn scrape_and_insert_all_shares(
         .run_phase(
             ProgressPhase::InsertShares,
             Some(scraped_shares.len() as u64),
-            insert_shares_with_progress(scraped_shares, &pool, workflow_progress.clone()),
+            insert_shares(scraped_shares, &pool, workflow_progress.clone()),
         )
         .await;
 
@@ -401,7 +368,7 @@ pub async fn scrape_and_insert_all_isins(
         .run_phase(
             ProgressPhase::ScrapeIsins,
             None,
-            scraper::isins::scrape_all_isins_with_progress(runtime, workflow_progress.clone()),
+            scraper::isins::scrape_all_isins(runtime, workflow_progress.clone()),
         )
         .await;
     let scraped_isins = isins.unmetric().into_iter().collect::<Vec<_>>();
@@ -410,7 +377,7 @@ pub async fn scrape_and_insert_all_isins(
         .run_phase(
             ProgressPhase::InsertIsins,
             Some(scraped_isins.len() as u64),
-            insert_isins_with_progress(scraped_isins, &pool, workflow_progress.clone())
+            insert_isins(scraped_isins, &pool, workflow_progress.clone())
                 .instrument(info_span!("insert_all_isins")),
         )
         .await;
@@ -547,7 +514,7 @@ mod tests {
             ("IT0000000002".to_string(), false),
         ];
 
-        let metrics = insert_items_with_progress(
+        let metrics = insert_items(
             items,
             |(isin, _)| isin.clone(),
             |(_, succeeds)| async move { succeeds.then_some(()).ok_or("insert failed") },

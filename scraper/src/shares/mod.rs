@@ -15,13 +15,6 @@ use crate::{
     ScraperRuntime,
 };
 
-pub async fn scrape_all_shares(
-    runtime: &ScraperRuntime,
-    share_isins: Vec<ShareIsin>,
-) -> WithMetrics<Vec<Share>> {
-    scrape_all_shares_with_progress(runtime, share_isins, NoopShareScrapeProgress).await
-}
-
 struct ShareScraper<F> {
     share_isins: Vec<ShareIsin>,
     concurrency: usize,
@@ -99,14 +92,7 @@ pub trait ShareScrapeProgress: Clone {
     fn share_scraped(&self, isin: String, result: ScraperResult<()>);
 }
 
-#[derive(Clone)]
-pub struct NoopShareScrapeProgress;
-
-impl ShareScrapeProgress for NoopShareScrapeProgress {
-    fn share_scraped(&self, _isin: String, _result: ScraperResult<()>) {}
-}
-
-pub async fn scrape_all_shares_with_progress<P>(
+pub async fn scrape_all_shares<P>(
     runtime: &ScraperRuntime,
     share_isins: Vec<ShareIsin>,
     progress: P,
