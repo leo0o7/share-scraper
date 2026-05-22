@@ -6,43 +6,56 @@ use scraper::isins::types::ShareIsin;
 
 use crate::metrics::InsertionMetrics;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IsinInsertCompletion {
+    pub isin: String,
+    pub successful: bool,
+}
+
 pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) -> InsertionMetrics {
+    insert_all_isins_with_progress(isins, pool, |_| {}).await
+}
+
+pub async fn insert_all_isins_with_progress(
+    isins: Vec<ShareIsin>,
+    pool: &Pool<Postgres>,
+    on_completion: impl Fn(IsinInsertCompletion),
+) -> InsertionMetrics {
     let isin_num = isins.len() as i32;
 
     let mut tasks = FuturesUnordered::new();
 
     info!("Total ISINs found: {}", isins.len());
-    for isin in isins.clone() {
-        tasks.push(insert_isin(isin, pool));
+    for isin in isins {
+        let isin_str = isin.isin.to_string();
+        tasks.push(async move { (isin_str, insert_isin(isin, pool).await) });
     }
 
     let mut curr_idx = 0;
     let mut successful_inserts = 0;
-    while let Some(res) = tasks.next().await {
+    let mut failed_inserts = 0;
+    while let Some((isin, res)) = tasks.next().await {
         curr_idx += 1;
 
-        if let Err(e) = res {
+        let successful = if let Err(e) = res {
             error!(
                 "Unable to insert ISIN {}/{}, ({}) {}",
-                curr_idx,
-                isin_num,
-                isins[curr_idx - 1].isin,
-                e
+                curr_idx, isin_num, isin, e
             );
+            failed_inserts += 1;
+            false
         } else {
-            info!(
-                "Inserted ISIN {}/{}, ({})",
-                curr_idx,
-                isin_num,
-                isins[curr_idx - 1].isin
-            );
+            info!("Inserted ISIN {}/{}, ({})", curr_idx, isin_num, isin);
             successful_inserts += 1;
-        }
+            true
+        };
+        on_completion(IsinInsertCompletion { isin, successful });
     }
 
     InsertionMetrics {
         total: isin_num,
         successful: successful_inserts,
+        failed: failed_inserts,
     }
 }
 

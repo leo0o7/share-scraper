@@ -3,7 +3,7 @@ pub mod parsers;
 pub(crate) mod property_selector;
 pub use models::{share::Share, ScrapableStruct};
 
-use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tokio::{sync::Semaphore, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
@@ -19,40 +19,68 @@ pub async fn scrape_all_shares(
     runtime: &ScraperRuntime,
     share_isins: Vec<ShareIsin>,
 ) -> WithMetrics<Vec<Share>> {
+    scrape_all_shares_with_progress(runtime, share_isins, |_| {}).await
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareScrapeCompletion {
+    pub isin: String,
+    pub result: Result<(), ScrapingError>,
+}
+
+pub async fn scrape_all_shares_with_progress<F>(
+    runtime: &ScraperRuntime,
+    share_isins: Vec<ShareIsin>,
+    mut on_completion: F,
+) -> WithMetrics<Vec<Share>>
+where
+    F: FnMut(ShareScrapeCompletion),
+{
     let mut metrics = ScrapingMetrics::empty();
     let total_shares = share_isins.len();
     metrics.total = total_shares as i32;
 
     let mut res: Vec<Share> = Vec::new();
     let permits = Arc::new(Semaphore::new(runtime.share_concurrency()));
-    let tasks: Vec<_> = share_isins
+    let mut tasks: FuturesUnordered<_> = share_isins
         .into_iter()
         .enumerate()
         .map(|(i, share_isin)| {
             let permits = Arc::clone(&permits);
             let runtime = runtime.clone();
             tokio::spawn(async move {
-                let isin_str = &share_isin.isin.to_string();
+                let isin_str = share_isin.isin.to_string();
                 let _permit = permits.acquire().await.unwrap();
-                scrape_share_with_max_duration(&runtime, share_isin)
+                let result = scrape_share_with_max_duration(&runtime, share_isin)
                     .instrument(info_span!(
                         "scraping_share",
                         isin = isin_str,
                         curr = i,
                         total = total_shares,
                     ))
-                    .await
+                    .await;
+                (isin_str, result)
             })
         })
         .collect();
 
-    for result in join_all(tasks).await {
+    while let Some(result) = tasks.next().await {
         match result {
-            Ok(Ok(result)) => {
+            Ok((isin, Ok(result))) => {
                 metrics.successful += 1;
+                on_completion(ShareScrapeCompletion {
+                    isin,
+                    result: Ok(()),
+                });
                 res.push(result);
             }
-            Ok(Err(e)) => metrics.errors.update(e),
+            Ok((isin, Err(e))) => {
+                metrics.errors.update(e.clone());
+                on_completion(ShareScrapeCompletion {
+                    isin,
+                    result: Err(e),
+                });
+            }
             Err(e) => error!("task failed {e}"),
         }
     }

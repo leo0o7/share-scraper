@@ -1,4 +1,4 @@
-mod errors;
+pub mod errors;
 pub mod exponential_backoff;
 pub mod isins;
 pub mod metrics;
