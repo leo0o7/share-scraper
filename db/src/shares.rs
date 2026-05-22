@@ -9,12 +9,6 @@ use tracing::{error, info, info_span, warn, Instrument};
 use crate::metrics::InsertionMetrics;
 use crate::utils::empty_string_as_none;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShareInsertCompletion {
-    pub isin: String,
-    pub successful: bool,
-}
-
 // IMPORTANT:
 // share queries are found at:
 // db/queries/share/*.sql
@@ -205,14 +199,6 @@ pub async fn get_shares_to_refresh(
 }
 
 pub async fn insert_all_shares(shares: Vec<Share>, pool: &Pool<Postgres>) -> InsertionMetrics {
-    insert_all_shares_with_progress(shares, pool, |_| {}).await
-}
-
-pub async fn insert_all_shares_with_progress(
-    shares: Vec<Share>,
-    pool: &Pool<Postgres>,
-    on_completion: impl Fn(ShareInsertCompletion),
-) -> InsertionMetrics {
     let share_num = shares.len() as i32;
     let mut tasks = FuturesUnordered::new();
 
@@ -237,18 +223,12 @@ pub async fn insert_all_shares_with_progress(
         curr_idx += 1;
         info!("Inserting share {}/{}", curr_idx, share_num);
 
-        let successful = if let Err(e) = res {
+        if let Err(e) = res {
             error!("Unable to insert Share {}, {}", isin, e);
             failed_inserts += 1;
-            false
         } else {
             successful_inserts += 1;
-            true
-        };
-        on_completion(ShareInsertCompletion {
-            isin: isin.to_string(),
-            successful,
-        });
+        }
     }
 
     InsertionMetrics {
