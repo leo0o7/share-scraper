@@ -18,6 +18,73 @@ use company_candidate::{
     company_page_signature, extract_company_elements, parse_elements, CompanyPageSignature,
 };
 
+struct IsinCrawler<I, F> {
+    letters: I,
+    max_pages: u8,
+    fetch_page: F,
+}
+
+impl<I, F> IsinCrawler<I, F> {
+    fn new(letters: I, max_pages: u8, fetch_page: F) -> Self {
+        Self {
+            letters,
+            max_pages,
+            fetch_page,
+        }
+    }
+}
+
+impl<I, F, Fut> IsinCrawler<I, F>
+where
+    I: IntoIterator<Item = u8>,
+    F: Fn(u8, u8) -> Fut + Clone,
+    Fut: Future<Output = ScraperResult<String>>,
+{
+    #[cfg(test)]
+    async fn crawl(self) -> WithMetrics<HashSet<ShareIsin>> {
+        self.crawl_observing(|_| {}, |_| {}).await
+    }
+
+    async fn crawl_observing<PageCompletion, LetterCompletion>(
+        self,
+        on_page_completion: PageCompletion,
+        on_letter_completion: LetterCompletion,
+    ) -> WithMetrics<HashSet<ShareIsin>>
+    where
+        PageCompletion: Fn(IsinScrapeCompletion) + Clone,
+        LetterCompletion: Fn(char) + Clone,
+    {
+        let mut metrics = ScrapingMetrics::empty();
+        let mut tasks = FuturesUnordered::new();
+
+        for letter in self.letters {
+            let letter = letter as char;
+            let fetch_page = self.fetch_page.clone();
+            let on_page_completion = on_page_completion.clone();
+            let on_letter_completion = on_letter_completion.clone();
+            tasks.push(
+                crawl_isins_for_letter_with_fetcher(
+                    letter,
+                    self.max_pages,
+                    move |page| fetch_page(letter as u8, page),
+                    on_page_completion,
+                    on_letter_completion,
+                )
+                .instrument(info_span!("scraping isins", letter = letter.to_string())),
+            );
+        }
+
+        let mut res: HashSet<ShareIsin> = HashSet::new();
+
+        while let Some(mut result) = tasks.next().await {
+            res.extend(result.unmetric());
+            metrics = metrics + result.metrics;
+        }
+
+        WithMetrics::new(res, metrics)
+    }
+}
+
 pub async fn scrape_all_isins(runtime: &ScraperRuntime) -> WithMetrics<HashSet<ShareIsin>> {
     scrape_all_isins_with_progress(runtime, |_| {}, |_| {}).await
 }
@@ -40,72 +107,13 @@ where
     PageCompletion: Fn(IsinScrapeCompletion) + Clone,
     LetterCompletion: Fn(char) + Clone,
 {
-    scrape_all_isins_with_fetcher_and_progress(
+    IsinCrawler::new(
         b'A'..=b'Z',
         runtime.isin_max_pages_per_letter(),
         |letter, page| async move { fetch_isins_page(runtime, letter as char, page).await },
-        on_page_completion,
-        on_letter_completion,
     )
+    .crawl_observing(on_page_completion, on_letter_completion)
     .await
-}
-
-#[cfg(test)]
-async fn scrape_all_isins_with_fetcher<I, F, Fut>(
-    letters: I,
-    max_pages: u8,
-    fetch_page: F,
-) -> WithMetrics<HashSet<ShareIsin>>
-where
-    I: IntoIterator<Item = u8>,
-    F: Fn(u8, u8) -> Fut + Clone,
-    Fut: Future<Output = ScraperResult<String>>,
-{
-    scrape_all_isins_with_fetcher_and_progress(letters, max_pages, fetch_page, |_| {}, |_| {}).await
-}
-
-async fn scrape_all_isins_with_fetcher_and_progress<I, F, Fut, PageCompletion, LetterCompletion>(
-    letters: I,
-    max_pages: u8,
-    fetch_page: F,
-    on_page_completion: PageCompletion,
-    on_letter_completion: LetterCompletion,
-) -> WithMetrics<HashSet<ShareIsin>>
-where
-    I: IntoIterator<Item = u8>,
-    F: Fn(u8, u8) -> Fut + Clone,
-    Fut: Future<Output = ScraperResult<String>>,
-    PageCompletion: Fn(IsinScrapeCompletion) + Clone,
-    LetterCompletion: Fn(char) + Clone,
-{
-    let mut metrics = ScrapingMetrics::empty();
-    let mut tasks = FuturesUnordered::new();
-
-    for letter in letters {
-        let letter = letter as char;
-        let fetch_page = fetch_page.clone();
-        let on_page_completion = on_page_completion.clone();
-        let on_letter_completion = on_letter_completion.clone();
-        tasks.push(
-            crawl_isins_for_letter_with_fetcher(
-                letter,
-                max_pages,
-                move |page| fetch_page(letter as u8, page),
-                on_page_completion,
-                on_letter_completion,
-            )
-            .instrument(info_span!("scraping isins", letter = letter.to_string())),
-        );
-    }
-
-    let mut res: HashSet<ShareIsin> = HashSet::new();
-
-    while let Some(mut result) = tasks.next().await {
-        res.extend(result.unmetric());
-        metrics = metrics + result.metrics;
-    }
-
-    WithMetrics::new(res, metrics)
 }
 
 async fn crawl_isins_for_letter_with_fetcher<F, Fut, PageCompletion, LetterCompletion>(
@@ -220,7 +228,7 @@ mod tests {
     use crate::errors::ScrapingError;
     use tokio::sync::{mpsc, Notify};
 
-    use super::{parse_page, scrape_all_isins_with_fetcher};
+    use super::{parse_page, IsinCrawler};
 
     #[test]
     fn parses_company_href_with_market_suffix_as_website_isin_token() {
@@ -365,7 +373,7 @@ mod tests {
         let scrape_task = tokio::spawn({
             let release_first_pages = Arc::clone(&release_first_pages);
             async move {
-                scrape_all_isins_with_fetcher(b'A'..=b'Z', 2, move |letter, page| {
+                IsinCrawler::new(b'A'..=b'Z', 2, move |letter, page| {
                     let started_tx = started_tx.clone();
                     let release_first_pages = Arc::clone(&release_first_pages);
 
@@ -379,6 +387,7 @@ mod tests {
                         Ok::<_, ScrapingError>(page_html(letter))
                     }
                 })
+                .crawl()
                 .await
             }
         });
@@ -405,12 +414,12 @@ mod tests {
         assert_eq!(scraped.metrics.successful, 26);
         assert_eq!(scraped.metrics.errors.parsing_error, 1);
 
-        let mut capped =
-            scrape_all_isins_with_fetcher(b'A'..=b'A', 1, move |letter, page| async move {
-                assert_eq!(page, 1);
-                Ok::<_, ScrapingError>(page_html(letter))
-            })
-            .await;
+        let mut capped = IsinCrawler::new(b'A'..=b'A', 1, move |letter, page| async move {
+            assert_eq!(page, 1);
+            Ok::<_, ScrapingError>(page_html(letter))
+        })
+        .crawl()
+        .await;
         let capped_isins = capped.unmetric();
 
         assert_eq!(capped_isins.len(), 1);
@@ -439,17 +448,17 @@ mod tests {
             )
         }
 
-        let mut scraped =
-            scrape_all_isins_with_fetcher(b'S'..=b'S', 2, move |_letter, page| async move {
-                let name = if page == 1 {
-                    "Stable Name"
-                } else {
-                    "Changed Name"
-                };
+        let mut scraped = IsinCrawler::new(b'S'..=b'S', 2, move |_letter, page| async move {
+            let name = if page == 1 {
+                "Stable Name"
+            } else {
+                "Changed Name"
+            };
 
-                Ok::<_, ScrapingError>(page_html(name))
-            })
-            .await;
+            Ok::<_, ScrapingError>(page_html(name))
+        })
+        .crawl()
+        .await;
         let isins = scraped.unmetric();
 
         assert_eq!(isins.len(), 1);
@@ -481,17 +490,17 @@ mod tests {
             )
         }
 
-        let mut scraped =
-            scrape_all_isins_with_fetcher(b'C'..=b'C', 3, move |_letter, page| async move {
-                let isin = match page {
-                    1 | 3 => "IT0003128367",
-                    2 => "IT0000072618",
-                    _ => unreachable!(),
-                };
+        let mut scraped = IsinCrawler::new(b'C'..=b'C', 3, move |_letter, page| async move {
+            let isin = match page {
+                1 | 3 => "IT0003128367",
+                2 => "IT0000072618",
+                _ => unreachable!(),
+            };
 
-                Ok::<_, ScrapingError>(page_html(isin))
-            })
-            .await;
+            Ok::<_, ScrapingError>(page_html(isin))
+        })
+        .crawl()
+        .await;
         let isins = scraped.unmetric();
 
         assert_eq!(isins.len(), 2);
