@@ -167,6 +167,84 @@ impl ProgressState {
     pub(crate) fn failed(&self) -> bool {
         self.scrape_errors() > 0 || self.save_errors() > 0
     }
+
+    pub(crate) fn snapshot(&self, now: Instant) -> ProgressSnapshot {
+        let phases = self
+            .phases
+            .iter()
+            .map(|(phase, progress)| {
+                (
+                    *phase,
+                    PhaseSnapshot {
+                        total: progress.total,
+                        completed: progress.completed,
+                        successful: progress.successful,
+                        errors: progress.errors,
+                        network_errors: progress.network_errors,
+                        invalid_pages: progress.invalid_pages,
+                        timeouts: progress.timeouts,
+                        max_retries: progress.max_retries,
+                        parsing_errors: progress.parsing_errors,
+                        isins_found: progress.isins_found,
+                        letters_completed: progress.letters_completed,
+                        last: progress.last.clone(),
+                        status: self.status(*phase),
+                        elapsed: self.phase_elapsed(*phase, now),
+                    },
+                )
+            })
+            .collect();
+
+        ProgressSnapshot {
+            elapsed: self.elapsed(now),
+            phases,
+            active_phase: self.active_phase(),
+            current_phase: self.current_phase(),
+            scrape_errors: self.scrape_errors(),
+            save_errors: self.save_errors(),
+            failed: self.failed(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProgressSnapshot {
+    pub(crate) elapsed: Duration,
+    phases: HashMap<ProgressPhase, PhaseSnapshot>,
+    pub(crate) active_phase: Option<ProgressPhase>,
+    pub(crate) current_phase: Option<ProgressPhase>,
+    pub(crate) scrape_errors: u64,
+    pub(crate) save_errors: u64,
+    pub(crate) failed: bool,
+}
+
+impl ProgressSnapshot {
+    pub(crate) fn phase(&self, phase: ProgressPhase) -> Option<&PhaseSnapshot> {
+        self.phases.get(&phase)
+    }
+
+    pub(crate) fn status(&self, phase: ProgressPhase) -> PhaseStatus {
+        self.phase(phase)
+            .map_or(PhaseStatus::Pending, |progress| progress.status)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PhaseSnapshot {
+    pub(crate) total: Option<u64>,
+    pub(crate) completed: u64,
+    pub(crate) successful: u64,
+    pub(crate) errors: u64,
+    pub(crate) network_errors: u64,
+    pub(crate) invalid_pages: u64,
+    pub(crate) timeouts: u64,
+    pub(crate) max_retries: u64,
+    pub(crate) parsing_errors: u64,
+    pub(crate) isins_found: u64,
+    pub(crate) letters_completed: u64,
+    pub(crate) last: Option<String>,
+    pub(crate) status: PhaseStatus,
+    pub(crate) elapsed: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -377,5 +455,59 @@ mod tests {
         assert_eq!(state.scrape_errors(), 1);
         assert_eq!(state.save_errors(), 0);
         assert!(state.failed());
+    }
+
+    #[test]
+    fn snapshot_exposes_observable_progress_without_live_reducer_access() {
+        let start = Instant::now();
+        let scrape_done = start + Duration::from_secs(2);
+        let mut state = ProgressState::new(ScraperOperation::RefreshShares, start);
+
+        state.apply(
+            &ProgressEvent::PhaseStarted {
+                phase: ProgressPhase::LoadStaleShares,
+                total: None,
+            },
+            start,
+        );
+        state.apply(
+            &ProgressEvent::PhaseFinished {
+                phase: ProgressPhase::LoadStaleShares,
+            },
+            start,
+        );
+        state.apply(
+            &ProgressEvent::PhaseStarted {
+                phase: ProgressPhase::ScrapeShares,
+                total: Some(2),
+            },
+            start,
+        );
+        state.apply(
+            &ProgressEvent::ShareScraped {
+                isin: "IT0000000001".to_string(),
+                result: Ok(()),
+            },
+            start + Duration::from_secs(1),
+        );
+        state.apply(
+            &ProgressEvent::PhaseFinished {
+                phase: ProgressPhase::ScrapeShares,
+            },
+            scrape_done,
+        );
+
+        let snapshot = state.snapshot(scrape_done + Duration::from_secs(1));
+        let scrape = snapshot.phase(ProgressPhase::ScrapeShares).unwrap();
+
+        assert_eq!(snapshot.elapsed, Duration::from_secs(3));
+        assert_eq!(snapshot.active_phase, None);
+        assert_eq!(snapshot.current_phase, Some(ProgressPhase::InsertShares));
+        assert_eq!(scrape.total, Some(2));
+        assert_eq!(scrape.completed, 1);
+        assert_eq!(scrape.successful, 1);
+        assert_eq!(scrape.status, PhaseStatus::Done);
+        assert_eq!(scrape.elapsed, Some(Duration::from_secs(2)));
+        assert_eq!(scrape.last, Some("IT0000000001".to_string()));
     }
 }

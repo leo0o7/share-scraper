@@ -10,8 +10,8 @@ use tabled::{
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use crate::operation::ScraperOperation;
-use crate::progress_state::{PhaseProgress, PhaseStatus, ProgressState};
+use crate::operation::{OperationMetadata, ScraperOperation};
+use crate::progress_state::{PhaseSnapshot, PhaseStatus, ProgressSnapshot, ProgressState};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const TARGET_WIDTH: usize = 100;
@@ -64,11 +64,17 @@ impl<W: Write> TerminalRenderer<W> {
 
         let now = Instant::now();
         self.state.complete(now);
-        self.redraw(&render_final(&self.state, now))
+        self.redraw(&render_final(
+            &self.state.snapshot(now),
+            self.state.operation.metadata(),
+        ))
     }
 
     fn redraw_live(&mut self, now: Instant) -> io::Result<()> {
-        self.redraw(&render_live(&self.state, now))
+        self.redraw(&render_live(
+            &self.state.snapshot(now),
+            self.state.operation.metadata(),
+        ))
     }
 
     fn redraw(&mut self, output: &str) -> io::Result<()> {
@@ -95,47 +101,47 @@ struct Column {
     alignment: Alignment,
 }
 
-fn render_live(state: &ProgressState, now: Instant) -> String {
+fn render_live(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
     [
-        operation_title(state.operation).to_string(),
+        metadata.title.to_string(),
         String::new(),
-        render_summary_table(state, now),
+        render_summary_table(snapshot, metadata),
         String::new(),
-        render_phase_table(state, now),
+        render_phase_table(snapshot, metadata),
         String::new(),
-        render_error_table(state),
+        render_error_table(snapshot, metadata),
         String::new(),
         "Current phase".to_string(),
-        render_loader(state, now),
+        render_loader(snapshot, metadata),
     ]
     .join("\n")
 }
 
-fn render_final(state: &ProgressState, now: Instant) -> String {
+fn render_final(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
     let mut sections = vec![format!(
         "{} {}",
-        operation_title(state.operation),
-        if state.failed() {
+        metadata.title,
+        if snapshot.failed {
             "failed"
         } else {
             "completed"
         }
     )];
-    sections.push(format!("Duration: {}", format_duration(state.elapsed(now))));
-    if let Some(reason) = failure_reason(state) {
+    sections.push(format!("Duration: {}", format_duration(snapshot.elapsed)));
+    if let Some(reason) = failure_reason(snapshot, metadata) {
         sections.push(format!("Reason: {reason}"));
     }
     sections.push(String::new());
-    sections.push(render_phase_table(state, now));
+    sections.push(render_phase_table(snapshot, metadata));
     sections.push(String::new());
-    sections.push(render_error_table(state));
+    sections.push(render_error_table(snapshot, metadata));
     sections.join("\n")
 }
 
-fn render_summary_table(state: &ProgressState, now: Instant) -> String {
-    let current_phase = state
-        .current_phase()
-        .map(|phase| phase_label(state.operation, phase))
+fn render_summary_table(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
+    let current_phase = snapshot
+        .current_phase
+        .map(|phase| metadata.phase_label(phase))
         .unwrap_or("Complete");
 
     render_table(
@@ -152,30 +158,33 @@ fn render_summary_table(state: &ProgressState, now: Instant) -> String {
         ],
         &[
             vec!["Status".to_string(), "Running".to_string()],
-            vec!["Elapsed".to_string(), format_duration(state.elapsed(now))],
+            vec!["Elapsed".to_string(), format_duration(snapshot.elapsed)],
             vec!["Current phase".to_string(), current_phase.to_string()],
         ],
     )
 }
 
-fn render_phase_table(state: &ProgressState, now: Instant) -> String {
-    match state.operation {
-        ScraperOperation::ScrapeAndInsertShares => {
-            render_share_phase_table(state, now, "Shares scraped", ProgressPhase::LoadShareIsins)
-        }
+fn render_phase_table(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
+    match metadata.operation {
+        ScraperOperation::ScrapeAndInsertShares => render_share_phase_table(
+            snapshot,
+            metadata,
+            "Shares scraped",
+            ProgressPhase::LoadShareIsins,
+        ),
         ScraperOperation::RefreshShares => render_share_phase_table(
-            state,
-            now,
+            snapshot,
+            metadata,
             "Shares refreshed",
             ProgressPhase::LoadStaleShares,
         ),
-        ScraperOperation::ScrapeAndInsertIsins => render_isin_phase_table(state, now),
+        ScraperOperation::ScrapeAndInsertIsins => render_isin_phase_table(snapshot, metadata),
     }
 }
 
 fn render_share_phase_table(
-    state: &ProgressState,
-    now: Instant,
+    snapshot: &ProgressSnapshot,
+    metadata: OperationMetadata,
     scrape_column: &'static str,
     load_phase: ProgressPhase,
 ) -> String {
@@ -195,37 +204,37 @@ fn render_share_phase_table(
         ],
         &[
             vec![
-                phase_label(state.operation, load_phase).to_string(),
-                state.status(load_phase).label().to_string(),
-                phase_total_or_dash(state, load_phase),
+                metadata.phase_label(load_phase).to_string(),
+                snapshot.status(load_phase).label().to_string(),
+                phase_total_or_dash(snapshot, load_phase),
                 "-".to_string(),
                 "-".to_string(),
                 "-".to_string(),
-                phase_elapsed_or_dash(state, load_phase, now),
+                phase_elapsed_or_dash(snapshot, load_phase),
             ],
             vec![
-                phase_label(state.operation, scrape_phase).to_string(),
-                state.status(scrape_phase).label().to_string(),
-                phase_total_or_dash(state, scrape_phase),
-                phase_success_or_dash(state, scrape_phase),
+                metadata.phase_label(scrape_phase).to_string(),
+                snapshot.status(scrape_phase).label().to_string(),
+                phase_total_or_dash(snapshot, scrape_phase),
+                phase_success_or_dash(snapshot, scrape_phase),
                 "-".to_string(),
-                phase_errors_or_dash(state, scrape_phase),
-                phase_elapsed_or_dash(state, scrape_phase, now),
+                phase_errors_or_dash(snapshot, scrape_phase),
+                phase_elapsed_or_dash(snapshot, scrape_phase),
             ],
             vec![
-                phase_label(state.operation, save_phase).to_string(),
-                state.status(save_phase).label().to_string(),
-                phase_total_or_dash(state, save_phase),
+                metadata.phase_label(save_phase).to_string(),
+                snapshot.status(save_phase).label().to_string(),
+                phase_total_or_dash(snapshot, save_phase),
                 "-".to_string(),
-                phase_success_or_dash(state, save_phase),
-                phase_errors_or_dash(state, save_phase),
-                phase_elapsed_or_dash(state, save_phase, now),
+                phase_success_or_dash(snapshot, save_phase),
+                phase_errors_or_dash(snapshot, save_phase),
+                phase_elapsed_or_dash(snapshot, save_phase),
             ],
         ],
     )
 }
 
-fn render_isin_phase_table(state: &ProgressState, now: Instant) -> String {
+fn render_isin_phase_table(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
     let discover_phase = ProgressPhase::ScrapeIsins;
     let save_phase = ProgressPhase::InsertIsins;
 
@@ -242,30 +251,30 @@ fn render_isin_phase_table(state: &ProgressState, now: Instant) -> String {
         ],
         &[
             vec![
-                phase_label(state.operation, discover_phase).to_string(),
-                state.status(discover_phase).label().to_string(),
-                phase_completed_or_dash(state, discover_phase),
-                phase_isins_found_or_dash(state, discover_phase),
+                metadata.phase_label(discover_phase).to_string(),
+                snapshot.status(discover_phase).label().to_string(),
+                phase_completed_or_dash(snapshot, discover_phase),
+                phase_isins_found_or_dash(snapshot, discover_phase),
                 "-".to_string(),
-                phase_errors_or_dash(state, discover_phase),
-                phase_elapsed_or_dash(state, discover_phase, now),
+                phase_errors_or_dash(snapshot, discover_phase),
+                phase_elapsed_or_dash(snapshot, discover_phase),
             ],
             vec![
-                phase_label(state.operation, save_phase).to_string(),
-                state.status(save_phase).label().to_string(),
+                metadata.phase_label(save_phase).to_string(),
+                snapshot.status(save_phase).label().to_string(),
                 "-".to_string(),
-                phase_total_or_dash(state, save_phase),
-                phase_success_or_dash(state, save_phase),
-                phase_errors_or_dash(state, save_phase),
-                phase_elapsed_or_dash(state, save_phase, now),
+                phase_total_or_dash(snapshot, save_phase),
+                phase_success_or_dash(snapshot, save_phase),
+                phase_errors_or_dash(snapshot, save_phase),
+                phase_elapsed_or_dash(snapshot, save_phase),
             ],
         ],
     )
 }
 
-fn render_error_table(state: &ProgressState) -> String {
-    let phase = state.operation.metadata().scrape_phase;
-    let progress = state.phase(phase);
+fn render_error_table(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
+    let phase = metadata.scrape_phase;
+    let progress = snapshot.phase(phase);
 
     render_table(
         "Scrape error breakdown",
@@ -278,7 +287,7 @@ fn render_error_table(state: &ProgressState) -> String {
             right_column("Parsing"),
         ],
         &[vec![
-            phase_label(state.operation, phase).to_string(),
+            metadata.phase_label(phase).to_string(),
             format_number(progress.map_or(0, |progress| progress.network_errors)),
             format_number(progress.map_or(0, |progress| progress.invalid_pages)),
             format_number(progress.map_or(0, |progress| progress.timeouts)),
@@ -288,25 +297,25 @@ fn render_error_table(state: &ProgressState) -> String {
     )
 }
 
-fn render_loader(state: &ProgressState, now: Instant) -> String {
-    let Some(phase) = state.active_phase() else {
+fn render_loader(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> String {
+    let Some(phase) = snapshot.active_phase else {
         return "Waiting for next phase".to_string();
     };
-    let Some(progress) = state.phase(phase) else {
+    let Some(progress) = snapshot.phase(phase) else {
         return "Waiting for progress events".to_string();
     };
 
-    let label = loader_label(state.operation, phase);
-    let elapsed = phase_elapsed_or_dash(state, phase, now);
+    let label = metadata.loader_label(phase);
+    let elapsed = phase_elapsed_or_dash(snapshot, phase);
     match progress.total {
         Some(total) if total > 0 => render_progress_loader(label, progress, total, &elapsed),
-        _ => render_spinner_loader(label, progress, &elapsed, state.elapsed(now)),
+        _ => render_spinner_loader(label, progress, &elapsed, snapshot.elapsed),
     }
 }
 
 fn render_progress_loader(
     label: &str,
-    progress: &PhaseProgress,
+    progress: &PhaseSnapshot,
     total: u64,
     elapsed: &str,
 ) -> String {
@@ -334,7 +343,7 @@ fn render_progress_loader(
 
 fn render_spinner_loader(
     label: &str,
-    progress: &PhaseProgress,
+    progress: &PhaseSnapshot,
     elapsed: &str,
     operation_elapsed: Duration,
 ) -> String {
@@ -393,81 +402,78 @@ fn right_column(title: &'static str) -> Column {
     }
 }
 
-fn phase_total_or_dash(state: &ProgressState, phase: ProgressPhase) -> String {
-    if state.status(phase) == PhaseStatus::Pending {
+fn phase_total_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    if snapshot.status(phase) == PhaseStatus::Pending {
         return "-".to_string();
     }
 
-    state
+    snapshot
         .phase(phase)
         .and_then(|progress| progress.total)
         .map_or_else(|| "-".to_string(), format_number)
 }
 
-fn phase_completed_or_dash(state: &ProgressState, phase: ProgressPhase) -> String {
-    phase_number_or_dash(state, phase, |progress| progress.completed)
+fn phase_completed_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    phase_number_or_dash(snapshot, phase, |progress| progress.completed)
 }
 
-fn phase_success_or_dash(state: &ProgressState, phase: ProgressPhase) -> String {
-    phase_number_or_dash(state, phase, |progress| progress.successful)
+fn phase_success_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    phase_number_or_dash(snapshot, phase, |progress| progress.successful)
 }
 
-fn phase_errors_or_dash(state: &ProgressState, phase: ProgressPhase) -> String {
-    phase_number_or_dash(state, phase, |progress| progress.errors)
+fn phase_errors_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    phase_number_or_dash(snapshot, phase, |progress| progress.errors)
 }
 
-fn phase_isins_found_or_dash(state: &ProgressState, phase: ProgressPhase) -> String {
-    phase_number_or_dash(state, phase, |progress| progress.isins_found)
+fn phase_isins_found_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    phase_number_or_dash(snapshot, phase, |progress| progress.isins_found)
 }
 
 fn phase_number_or_dash(
-    state: &ProgressState,
+    snapshot: &ProgressSnapshot,
     phase: ProgressPhase,
-    value: impl FnOnce(&PhaseProgress) -> u64,
+    value: impl FnOnce(&PhaseSnapshot) -> u64,
 ) -> String {
-    if state.status(phase) == PhaseStatus::Pending {
+    if snapshot.status(phase) == PhaseStatus::Pending {
         return "-".to_string();
     }
 
-    state.phase(phase).map_or_else(
+    snapshot.phase(phase).map_or_else(
         || "-".to_string(),
         |progress| format_number(value(progress)),
     )
 }
 
-fn phase_elapsed_or_dash(state: &ProgressState, phase: ProgressPhase, now: Instant) -> String {
-    state
-        .phase_elapsed(phase, now)
+fn phase_elapsed_or_dash(snapshot: &ProgressSnapshot, phase: ProgressPhase) -> String {
+    snapshot
+        .phase(phase)
+        .and_then(|progress| progress.elapsed)
         .map_or_else(|| "-".to_string(), format_duration)
 }
 
-fn failure_reason(state: &ProgressState) -> Option<String> {
-    let scrape_errors = state.scrape_errors();
-    let save_errors = state.save_errors();
+fn failure_reason(snapshot: &ProgressSnapshot, metadata: OperationMetadata) -> Option<String> {
+    let scrape_errors = snapshot.scrape_errors;
+    let save_errors = snapshot.save_errors;
     match (scrape_errors, save_errors) {
         (0, 0) => None,
         (scrape_errors, 0) => Some(format!(
             "{} {}",
             format_number(scrape_errors),
-            scrape_error_label(state.operation, scrape_errors)
+            metadata.scrape_error_label(scrape_errors)
         )),
         (0, save_errors) => Some(format!(
             "{} {}",
             format_number(save_errors),
-            state.operation.metadata().save_error_label(save_errors)
+            metadata.save_error_label(save_errors)
         )),
         (scrape_errors, save_errors) => Some(format!(
             "{} {}, {} {}",
             format_number(scrape_errors),
-            scrape_error_label(state.operation, scrape_errors),
+            metadata.scrape_error_label(scrape_errors),
             format_number(save_errors),
-            state.operation.metadata().save_error_label(save_errors)
+            metadata.save_error_label(save_errors)
         )),
     }
-}
-
-fn scrape_error_label(operation: ScraperOperation, count: u64) -> &'static str {
-    operation.metadata().scrape_error_label(count)
 }
 
 fn progress_bar(completed: u64, total: u64, width: usize) -> String {
@@ -506,18 +512,6 @@ fn percent(completed: u64, total: u64) -> u64 {
     } else {
         ((completed.min(total) as u128) * 100 / (total as u128)) as u64
     }
-}
-
-fn operation_title(operation: ScraperOperation) -> &'static str {
-    operation.metadata().title
-}
-
-fn phase_label(operation: ScraperOperation, phase: ProgressPhase) -> &'static str {
-    operation.metadata().phase_label(phase)
-}
-
-fn loader_label(operation: ScraperOperation, phase: ProgressPhase) -> &'static str {
-    operation.metadata().loader_label(phase)
 }
 
 fn format_number(value: u64) -> String {
@@ -600,7 +594,8 @@ mod tests {
             active,
         );
 
-        let dashboard = render_live(&state, active);
+        let snapshot = state.snapshot(active);
+        let dashboard = render_live(&snapshot, state.operation.metadata());
         assert!(dashboard.contains("Share refresh"));
         assert!(dashboard.contains("┌"));
         assert!(dashboard.contains("Shares refreshed"));
@@ -646,7 +641,8 @@ mod tests {
         );
         state.complete(finished);
 
-        let report = render_final(&state, finished);
+        let snapshot = state.snapshot(finished);
+        let report = render_final(&snapshot, state.operation.metadata());
         assert!(report.contains("Share refresh failed"));
         assert!(report.contains("Duration: 02m 08s"));
         assert!(report.contains("Reason: 1 refresh error"));

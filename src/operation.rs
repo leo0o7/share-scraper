@@ -64,7 +64,7 @@ impl ScraperOperation {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OperationMetadata {
-    operation: ScraperOperation,
+    pub(crate) operation: ScraperOperation,
     pub(crate) cli_name: &'static str,
     pub(crate) title: &'static str,
     pub(crate) expected_phases: &'static [ProgressPhase],
