@@ -1,5 +1,3 @@
-use db::{isins::IsinInsertCompletion, shares::ShareInsertCompletion};
-use scraper::{errors::ScrapingError, isins::IsinScrapeCompletion, shares::ShareScrapeCompletion};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,29 +72,32 @@ impl ProgressSender {
         let _ = self.sender.send(ProgressEvent::PhaseFinished { phase });
     }
 
-    pub fn share_scraped(&self, completion: ShareScrapeCompletion) {
-        let result = completion.result.map_err(ScrapeErrorCategory::from);
-        let _ = self.sender.send(ProgressEvent::ShareScraped {
-            isin: completion.isin,
-            result,
-        });
+    pub fn share_scraped(&self, isin: String, result: Result<(), ScrapeErrorCategory>) {
+        let _ = self
+            .sender
+            .send(ProgressEvent::ShareScraped { isin, result });
     }
 
-    pub fn share_inserted(&self, completion: ShareInsertCompletion) {
-        let _ = self.sender.send(ProgressEvent::ShareInserted {
-            isin: completion.isin,
-            successful: completion.successful,
-        });
+    pub fn share_inserted(&self, isin: String, successful: bool) {
+        let _ = self
+            .sender
+            .send(ProgressEvent::ShareInserted { isin, successful });
     }
 
-    pub fn isin_page_scraped(&self, completion: IsinScrapeCompletion) {
-        let result = completion.result.map_err(ScrapeErrorCategory::from);
+    pub fn isin_page_scraped(
+        &self,
+        letter: char,
+        page: u8,
+        isins_found: u64,
+        result: Result<(), ScrapeErrorCategory>,
+        parsing_errors: u64,
+    ) {
         let _ = self.sender.send(ProgressEvent::IsinPageScraped {
-            letter: completion.letter,
-            page: completion.page,
-            isins_found: completion.isins_found,
+            letter,
+            page,
+            isins_found,
             result,
-            parsing_errors: completion.parsing_errors,
+            parsing_errors,
         });
     }
 
@@ -106,23 +107,10 @@ impl ProgressSender {
             .send(ProgressEvent::IsinLetterCompleted { letter });
     }
 
-    pub fn isin_inserted(&self, completion: IsinInsertCompletion) {
-        let _ = self.sender.send(ProgressEvent::IsinInserted {
-            isin: completion.isin,
-            successful: completion.successful,
-        });
-    }
-}
-
-impl From<ScrapingError> for ScrapeErrorCategory {
-    fn from(value: ScrapingError) -> Self {
-        match value {
-            ScrapingError::NetworkError => ScrapeErrorCategory::NetworkError,
-            ScrapingError::InvalidPage => ScrapeErrorCategory::InvalidPage,
-            ScrapingError::Timeout => ScrapeErrorCategory::Timeout,
-            ScrapingError::MaxRetries => ScrapeErrorCategory::MaxRetries,
-            ScrapingError::ParsingErr => ScrapeErrorCategory::ParsingError,
-        }
+    pub fn isin_inserted(&self, isin: String, successful: bool) {
+        let _ = self
+            .sender
+            .send(ProgressEvent::IsinInserted { isin, successful });
     }
 }
 
@@ -136,10 +124,7 @@ mod tests {
         let progress = ProgressSender::new(sender);
 
         for index in 0..1_000 {
-            progress.share_scraped(ShareScrapeCompletion {
-                isin: format!("IT{index:010}"),
-                result: Err(ScrapingError::Timeout),
-            });
+            progress.share_scraped(format!("IT{index:010}"), Err(ScrapeErrorCategory::Timeout));
         }
         drop(progress);
 
@@ -149,5 +134,25 @@ mod tests {
         }
 
         assert_eq!(received, 1_000);
+    }
+
+    #[tokio::test]
+    async fn progress_sender_tolerates_closed_channels_for_lifecycle_and_updates() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        let progress = ProgressSender::new(sender);
+
+        progress
+            .phase_started(ProgressPhase::ScrapeShares, Some(1))
+            .await;
+        progress.phase_finished(ProgressPhase::ScrapeShares).await;
+        progress.share_scraped(
+            "IT0000000001".to_string(),
+            Err(ScrapeErrorCategory::Timeout),
+        );
+        progress.share_inserted("IT0000000001".to_string(), false);
+        progress.isin_page_scraped('A', 1, 0, Ok(()), 0);
+        progress.isin_letter_completed('A');
+        progress.isin_inserted("IT0000000001".to_string(), true);
     }
 }

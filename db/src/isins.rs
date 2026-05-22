@@ -6,21 +6,7 @@ use scraper::isins::types::ShareIsin;
 
 use crate::metrics::InsertionMetrics;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IsinInsertCompletion {
-    pub isin: String,
-    pub successful: bool,
-}
-
 pub async fn insert_all_isins(isins: Vec<ShareIsin>, pool: &Pool<Postgres>) -> InsertionMetrics {
-    insert_all_isins_with_progress(isins, pool, |_| {}).await
-}
-
-pub async fn insert_all_isins_with_progress(
-    isins: Vec<ShareIsin>,
-    pool: &Pool<Postgres>,
-    on_completion: impl Fn(IsinInsertCompletion),
-) -> InsertionMetrics {
     let isin_num = isins.len() as i32;
 
     let mut tasks = FuturesUnordered::new();
@@ -37,19 +23,16 @@ pub async fn insert_all_isins_with_progress(
     while let Some((isin, res)) = tasks.next().await {
         curr_idx += 1;
 
-        let successful = if let Err(e) = res {
+        if let Err(e) = res {
             error!(
                 "Unable to insert ISIN {}/{}, ({}) {}",
                 curr_idx, isin_num, isin, e
             );
             failed_inserts += 1;
-            false
         } else {
             info!("Inserted ISIN {}/{}, ({})", curr_idx, isin_num, isin);
             successful_inserts += 1;
-            true
-        };
-        on_completion(IsinInsertCompletion { isin, successful });
+        }
     }
 
     InsertionMetrics {
