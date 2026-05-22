@@ -11,10 +11,11 @@ use tracing::{info, info_span, instrument, Instrument};
 pub mod progress;
 
 use progress::{
-    IsinInsertProgress, IsinPageScrapeProgress, ProgressPhase, ProgressSender, ScrapeErrorCategory,
-    ShareInsertProgress, ShareScrapeProgress,
+    IsinInsertProgress, ProgressPhase, ProgressSender, ScrapeErrorCategory, ShareInsertProgress,
+    ShareScrapeProgress,
 };
 
+#[derive(Clone)]
 struct WorkflowProgress {
     progress: Option<ProgressSender>,
 }
@@ -53,9 +54,22 @@ impl WorkflowProgress {
         }
     }
 
-    fn isin_page_scraped(&self, completion: scraper::isins::IsinScrapeCompletion) {
+    fn isin_page_scraped(
+        &self,
+        letter: char,
+        page: u8,
+        isins_found: u64,
+        result: scraper::errors::ScraperResult<()>,
+        parsing_errors: u64,
+    ) {
         if let Some(progress) = &self.progress {
-            progress.isin_page_scraped(isin_page_scrape_progress(completion));
+            progress.isin_page_scraped(progress::IsinPageScrapeProgress {
+                letter,
+                page,
+                isins_found,
+                result: result.map_err(scrape_error_category),
+                parsing_errors,
+            });
         }
     }
 
@@ -69,6 +83,23 @@ impl WorkflowProgress {
         if let Some(progress) = &self.progress {
             progress.isin_inserted(isin_insert_progress(completion));
         }
+    }
+}
+
+impl scraper::isins::IsinCrawlProgress for WorkflowProgress {
+    fn page_scraped(
+        &self,
+        letter: char,
+        page: u8,
+        isins_found: u64,
+        result: scraper::errors::ScraperResult<()>,
+        parsing_errors: u64,
+    ) {
+        self.isin_page_scraped(letter, page, isins_found, result, parsing_errors);
+    }
+
+    fn letter_completed(&self, letter: char) {
+        self.isin_letter_completed(letter);
     }
 }
 
@@ -171,18 +202,6 @@ fn share_scrape_progress(
     ShareScrapeProgress {
         isin: completion.isin,
         result: completion.result.map_err(scrape_error_category),
-    }
-}
-
-fn isin_page_scrape_progress(
-    completion: scraper::isins::IsinScrapeCompletion,
-) -> IsinPageScrapeProgress {
-    IsinPageScrapeProgress {
-        letter: completion.letter,
-        page: completion.page,
-        isins_found: completion.isins_found,
-        result: completion.result.map_err(scrape_error_category),
-        parsing_errors: completion.parsing_errors,
     }
 }
 
@@ -302,15 +321,7 @@ pub async fn scrape_and_insert_all_isins(
         .run_phase(
             ProgressPhase::ScrapeIsins,
             None,
-            scraper::isins::scrape_all_isins_with_progress(
-                runtime,
-                |event| {
-                    workflow_progress.isin_page_scraped(event);
-                },
-                |letter| {
-                    workflow_progress.isin_letter_completed(letter);
-                },
-            ),
+            scraper::isins::scrape_all_isins_with_progress(runtime, workflow_progress.clone()),
         )
         .await;
     let scraped_isins = isins.unmetric().into_iter().collect::<Vec<_>>();
@@ -374,5 +385,31 @@ mod tests {
             .await;
 
         assert_eq!(result, "saved");
+    }
+
+    #[tokio::test]
+    async fn workflow_progress_forwards_isin_crawl_updates_as_normalized_events() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let progress = WorkflowProgress::new(Some(ProgressSender::new(sender)));
+
+        progress.isin_page_scraped('A', 2, 3, Ok(()), 1);
+        progress.isin_letter_completed('A');
+        drop(progress);
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(ProgressEvent::IsinPageScraped {
+                letter: 'A',
+                page: 2,
+                isins_found: 3,
+                result: Ok(()),
+                parsing_errors: 1,
+            })
+        );
+        assert_eq!(
+            receiver.recv().await,
+            Some(ProgressEvent::IsinLetterCompleted { letter: 'A' })
+        );
+        assert_eq!(receiver.recv().await, None);
     }
 }
