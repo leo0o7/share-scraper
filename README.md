@@ -1,13 +1,9 @@
-# Share Service
+# piazza
 
-A small Rust service for collecting Italian share data from Borsa Italiana and querying it from a local HTTP API.
+piazza turns Borsa Italiana's public share listings into structured data you can query locally.
 
-The project has two parts:
-
-- a scraper that reads the Borsa Italiana A-Z listing, follows the share pages, and stores the data in PostgreSQL
-- a server that exposes the stored data through a few JSON endpoints
-
-It is mostly built as a practical scraping/data project, not as a polished financial product. The interesting part is the full loop: discover ISINs, scrape the detailed pages, persist the result, then query it without hitting the source site again.
+The scraper discovers ISINs from the A-Z listings, fetches share pages concurrently with a configurable limit, handles temporary upstream failures with exponential backoff, and moves HTML parsing onto a Rayon pool so Tokio stays focused on I/O.
+Parsed shares are stored in PostgreSQL, with a small Axum API for querying the result.
 
 ## What It Stores
 
@@ -23,7 +19,7 @@ The database schema lives in `migrations/`. The SQL used by the database crate i
 ## Workspace Layout
 
 ```text
-share_service/
+piazza/
 ├── app_config/      # config.toml, env vars, validation
 ├── db/              # PostgreSQL queries and inserts
 ├── scraper/         # HTTP fetching and HTML parsing
@@ -53,7 +49,7 @@ You need Rust and PostgreSQL.
 Create a database, then point the app at it:
 
 ```sh
-DATABASE_URL=postgres://user:password@localhost/share_service
+DATABASE_URL=postgres://user:password@localhost/piazza
 ```
 
 The app reads `.env` from the project root, so for local use it is usually enough to put `DATABASE_URL` there.
@@ -127,12 +123,12 @@ curl 'http://127.0.0.1:3000/share?name=enel'
 
 ## Configuration
 
-Configuration is loaded from `config.toml`, then environment variables can override it with the `SHARE_SERVICE__` prefix.
+Configuration is loaded from `config.toml`, then environment variables can override it with the `PIAZZA__` prefix.
 
 For example:
 
 ```sh
-SHARE_SERVICE__SERVER__BIND_ADDRESS=127.0.0.1:4000 cargo run -p server
+PIAZZA__SERVER__BIND_ADDRESS=127.0.0.1:4000 cargo run -p server
 ```
 
 `DATABASE_URL` is also supported directly, because that is what most Rust/Postgres tooling expects.
@@ -143,32 +139,6 @@ Useful knobs in `config.toml`:
 - `scraper.share_refresh_age_minutes`: how old a record must be before `refresh-shares` picks it up
 - `scraper.isin_max_pages_per_letter`: safety cap for crawling each A-Z listing page
 - `logging.level`: default tracing level, overridden by `RUST_LOG`
-
-## Development
-
-Build everything:
-
-```sh
-cargo build
-```
-
-Run tests:
-
-```sh
-cargo test
-```
-
-Run clippy:
-
-```sh
-cargo clippy --workspace --all-targets
-```
-
-Format:
-
-```sh
-cargo fmt
-```
 
 ## Notes
 

@@ -51,7 +51,7 @@ impl Display for ConfigError {
             }
             ConfigError::MissingDatabaseUrl => write!(
                 f,
-                "missing database URL: set DATABASE_URL or SHARE_SERVICE__DATABASE__URL"
+                "missing database URL: set DATABASE_URL or PIAZZA__DATABASE__URL"
             ),
             ConfigError::InvalidDatabasePoolMaxConnections => {
                 write!(f, "database.pool_max_connections must be greater than zero")
@@ -202,7 +202,7 @@ pub fn load_config(manifest_dir: impl AsRef<Path>) -> ConfigResult<AppConfig> {
     let mut raw = Config::builder()
         .add_source(File::from(config_path))
         .add_source(
-            Environment::with_prefix("SHARE_SERVICE")
+            Environment::with_prefix("PIAZZA")
                 .separator("__")
                 .try_parsing(true),
         )
@@ -388,7 +388,7 @@ mod tests {
     #[serial]
     fn loads_root_config_from_binary_manifest_dir() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var("SHARE_SERVICE__SERVER__BIND_ADDRESS", None::<&str>, || {
+            temp_env::with_var("PIAZZA__SERVER__BIND_ADDRESS", None::<&str>, || {
                 let root = tempdir().unwrap();
                 let server_dir = root.path().join("server");
                 fs::create_dir(&server_dir).unwrap();
@@ -408,7 +408,7 @@ mod tests {
     fn supports_namespaced_environment_overrides() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SERVER__BIND_ADDRESS",
+                "PIAZZA__SERVER__BIND_ADDRESS",
                 Some("127.0.0.1:4000"),
                 || {
                     let root = tempdir().unwrap();
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     #[serial]
     fn rust_log_overrides_configured_logging_level() {
-        temp_env::with_var("SHARE_SERVICE__SERVER__BIND_ADDRESS", None::<&str>, || {
+        temp_env::with_var("PIAZZA__SERVER__BIND_ADDRESS", None::<&str>, || {
             temp_env::with_var("RUST_LOG", Some("debug"), || {
                 let root = tempdir().unwrap();
                 write_config(root.path(), "127.0.0.1:3000", "info", true);
@@ -441,7 +441,7 @@ mod tests {
     #[serial]
     fn rejects_invalid_socket_addresses() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var("SHARE_SERVICE__SERVER__BIND_ADDRESS", None::<&str>, || {
+            temp_env::with_var("PIAZZA__SERVER__BIND_ADDRESS", None::<&str>, || {
                 let root = tempdir().unwrap();
                 write_config(root.path(), "not-a-socket", "info", true);
 
@@ -456,7 +456,7 @@ mod tests {
     #[serial]
     fn rejects_invalid_logging_filters() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var("SHARE_SERVICE__SERVER__BIND_ADDRESS", None::<&str>, || {
+            temp_env::with_var("PIAZZA__SERVER__BIND_ADDRESS", None::<&str>, || {
                 let root = tempdir().unwrap();
                 write_config(root.path(), "127.0.0.1:3000", "not a filter", true);
 
@@ -471,20 +471,16 @@ mod tests {
     #[serial]
     fn legacy_database_url_populates_database_config() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var(
-                "DATABASE_URL",
-                Some("postgres://localhost/share_service"),
-                || {
-                    let root = tempdir().unwrap();
-                    write_config_without_database_url(root.path(), "127.0.0.1:3000", "info", true);
+            temp_env::with_var("DATABASE_URL", Some("postgres://localhost/piazza"), || {
+                let root = tempdir().unwrap();
+                write_config_without_database_url(root.path(), "127.0.0.1:3000", "info", true);
 
-                    let config = load_config(root.path()).unwrap();
+                let config = load_config(root.path()).unwrap();
 
-                    assert_eq!(config.database.url, "postgres://localhost/share_service");
-                    assert_eq!(config.database.pool_max_connections, 5);
-                    assert_eq!(config.database.acquire_timeout.as_secs(), 10);
-                },
-            )
+                assert_eq!(config.database.url, "postgres://localhost/piazza");
+                assert_eq!(config.database.pool_max_connections, 5);
+                assert_eq!(config.database.acquire_timeout.as_secs(), 10);
+            })
         });
     }
 
@@ -493,7 +489,7 @@ mod tests {
     fn loads_configured_share_refresh_age() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
+                "PIAZZA__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
                 Some("30"),
                 || {
                     let root = tempdir().unwrap();
@@ -511,7 +507,7 @@ mod tests {
     #[serial]
     fn loads_configured_scraper_retry_settings() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var("SHARE_SERVICE__SCRAPER__RETRY_COUNT", Some("4"), || {
+            temp_env::with_var("PIAZZA__SCRAPER__RETRY_COUNT", Some("4"), || {
                 let root = tempdir().unwrap();
                 write_config(root.path(), "127.0.0.1:3000", "info", true);
 
@@ -531,12 +527,9 @@ mod tests {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_vars(
                 [
-                    ("SHARE_SERVICE__SCRAPER__SHARE_CONCURRENCY", Some("25")),
-                    ("SHARE_SERVICE__SCRAPER__PARSE_THREADS", Some("2")),
-                    (
-                        "SHARE_SERVICE__SCRAPER__ISIN_MAX_PAGES_PER_LETTER",
-                        Some("12"),
-                    ),
+                    ("PIAZZA__SCRAPER__SHARE_CONCURRENCY", Some("25")),
+                    ("PIAZZA__SCRAPER__PARSE_THREADS", Some("2")),
+                    ("PIAZZA__SCRAPER__ISIN_MAX_PAGES_PER_LETTER", Some("12")),
                 ],
                 || {
                     let root = tempdir().unwrap();
@@ -558,7 +551,7 @@ mod tests {
     fn rejects_zero_isin_page_cap() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__ISIN_MAX_PAGES_PER_LETTER",
+                "PIAZZA__SCRAPER__ISIN_MAX_PAGES_PER_LETTER",
                 Some("0"),
                 || {
                     let root = tempdir().unwrap();
@@ -580,7 +573,7 @@ mod tests {
     fn rejects_zero_share_refresh_age() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
+                "PIAZZA__SCRAPER__SHARE_REFRESH_AGE_MINUTES",
                 Some("0"),
                 || {
                     let root = tempdir().unwrap();
@@ -601,18 +594,14 @@ mod tests {
     #[serial]
     fn rejects_zero_share_concurrency() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__SHARE_CONCURRENCY",
-                Some("0"),
-                || {
-                    let root = tempdir().unwrap();
-                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+            temp_env::with_var("PIAZZA__SCRAPER__SHARE_CONCURRENCY", Some("0"), || {
+                let root = tempdir().unwrap();
+                write_config(root.path(), "127.0.0.1:3000", "info", true);
 
-                    let err = load_config(root.path()).unwrap_err();
+                let err = load_config(root.path()).unwrap_err();
 
-                    assert!(matches!(err, ConfigError::InvalidScraperShareConcurrency));
-                },
-            )
+                assert!(matches!(err, ConfigError::InvalidScraperShareConcurrency));
+            })
         });
     }
 
@@ -620,21 +609,17 @@ mod tests {
     #[serial]
     fn rejects_zero_share_timeout() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
-            temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__SHARE_TIMEOUT_SECONDS",
-                Some("0"),
-                || {
-                    let root = tempdir().unwrap();
-                    write_config(root.path(), "127.0.0.1:3000", "info", true);
+            temp_env::with_var("PIAZZA__SCRAPER__SHARE_TIMEOUT_SECONDS", Some("0"), || {
+                let root = tempdir().unwrap();
+                write_config(root.path(), "127.0.0.1:3000", "info", true);
 
-                    let err = load_config(root.path()).unwrap_err();
+                let err = load_config(root.path()).unwrap_err();
 
-                    assert!(matches!(
-                        err,
-                        ConfigError::InvalidScraperShareTimeoutSeconds
-                    ));
-                },
-            )
+                assert!(matches!(
+                    err,
+                    ConfigError::InvalidScraperShareTimeoutSeconds
+                ));
+            })
         });
     }
 
@@ -643,7 +628,7 @@ mod tests {
     fn rejects_zero_scraper_http_timeout() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__HTTP_REQUEST_TIMEOUT_SECONDS",
+                "PIAZZA__SCRAPER__HTTP_REQUEST_TIMEOUT_SECONDS",
                 Some("0"),
                 || {
                     let root = tempdir().unwrap();
@@ -665,7 +650,7 @@ mod tests {
     fn rejects_zero_scraper_retry_delay() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var(
-                "SHARE_SERVICE__SCRAPER__RETRY_BASE_DELAY_MILLISECONDS",
+                "PIAZZA__SCRAPER__RETRY_BASE_DELAY_MILLISECONDS",
                 Some("0"),
                 || {
                     let root = tempdir().unwrap();
@@ -687,7 +672,7 @@ mod tests {
     fn rejects_missing_database_url() {
         temp_env::with_var("RUST_LOG", None::<&str>, || {
             temp_env::with_var("DATABASE_URL", None::<&str>, || {
-                temp_env::with_var("SHARE_SERVICE__DATABASE__URL", None::<&str>, || {
+                temp_env::with_var("PIAZZA__DATABASE__URL", None::<&str>, || {
                     let root = tempdir().unwrap();
                     write_config_without_database_url(root.path(), "127.0.0.1:3000", "info", true);
 
@@ -723,7 +708,7 @@ mod tests {
             bind_address,
             level,
             stdout,
-            "postgres://localhost/share_service",
+            "postgres://localhost/piazza",
         );
     }
 

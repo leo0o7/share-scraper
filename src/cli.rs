@@ -135,7 +135,7 @@ fn parse_output_mode(value: &str) -> Result<OutputMode, CliError> {
 }
 
 fn operation_help() -> &'static str {
-    "Usage: share_service [--output progress|logs] [operation]\n\nOperations:\n  scrape-shares    Scrape and insert all shares (default)\n  scrape-isins     Scrape and insert all ISINs\n  refresh-shares   Refresh shares older than the configured threshold\n\nOptions:\n  --output progress|logs    Choose terminal progress UI or stdout tracing logs"
+    "Usage: piazza [--output progress|logs] [operation]\n\nOperations:\n  scrape-shares    Scrape and insert all shares (default)\n  scrape-isins     Scrape and insert all ISINs\n  refresh-shares   Refresh shares older than the configured threshold\n\nOptions:\n  --output progress|logs    Choose terminal progress UI or stdout tracing logs"
 }
 
 #[cfg(test)]
@@ -204,7 +204,7 @@ mod tests {
         let err = parse_cli(["unknown".to_string()]).unwrap_err();
 
         assert!(err.0.contains("unsupported scraper operation: unknown"));
-        assert!(err.0.contains("Usage: share_service"));
+        assert!(err.0.contains("Usage: piazza"));
         assert!(err.0.contains("scrape-shares"));
     }
 
@@ -222,14 +222,14 @@ mod tests {
             parse_cli(["scrape-shares".to_string(), "refresh-shares".to_string()]).unwrap_err();
 
         assert!(err.0.contains("too many arguments"));
-        assert!(err.0.contains("Usage: share_service"));
+        assert!(err.0.contains("Usage: piazza"));
     }
 
     #[test]
     fn help_option_returns_help_text() {
         let err = parse_cli(["--help".to_string()]).unwrap_err();
 
-        assert!(err.0.starts_with("Usage: share_service"));
+        assert!(err.0.starts_with("Usage: piazza"));
         assert!(err.0.contains("refresh-shares"));
     }
 

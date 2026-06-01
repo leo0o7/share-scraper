@@ -13,7 +13,7 @@ server_file_path = "../server.log"
 scraper_file_path = "share_scraper.log"
 
 [database]
-# Keep the URL in .env as DATABASE_URL or set SHARE_SERVICE__DATABASE__URL.
+# Keep the URL in .env as DATABASE_URL or set PIAZZA__DATABASE__URL.
 pool_max_connections = 5
 acquire_timeout_seconds = 10
 
@@ -21,7 +21,7 @@ acquire_timeout_seconds = 10
 # Preserve the current refresh behavior: only refresh shares older than 15 minutes.
 share_refresh_age_minutes = 15
 # Preserve previous share scraping pressure and per-share timeout behavior.
-share_concurrency = 200
+share_concurrency = 20
 share_timeout_seconds = 300
 # Cap each A-Z letter crawl so repeated-page detection cannot run unbounded.
 isin_max_pages_per_letter = 20
