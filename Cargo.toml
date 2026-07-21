@@ -5,6 +5,7 @@ members = ["app_config", "db", "scraper", "scraper_utils", "server"]
 name = "piazza"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 app_config = { path = "app_config" }
